@@ -1,16 +1,15 @@
 # Game Name
 
-TEXT GOES HERE
+RushAPI
 
 # Team Color
 
-TEXT GOES HERE
+orange
 
 # Developers
 
-* Name (email)
-* Name (email)
-* Name (email)
+* Bruce Bermel (brbe@udel.edu)
+* John-Paul Newton (jpnewton@udel.edu)
 
 # Blurb
 
