@@ -2,6 +2,7 @@ import { GameObjects, Scene } from "phaser";
 
 import { EventBus } from "../event-bus";
 import type { ChangeableScene } from "../reactable-scene";
+import { DataLoader } from "../helpers/dataloader";
 
 export class MainMenu extends Scene implements ChangeableScene {
     background: GameObjects.Image;
@@ -14,12 +15,13 @@ export class MainMenu extends Scene implements ChangeableScene {
     }
 
     create() {
-        this.background = this.add.image(512, 384, "background");
+        const grid = new DataLoader(this);
+        grid.buildGrid(this.scale.width, this.scale.height);
 
         this.logo = this.add.image(512, 300, "logo").setDepth(100);
 
         this.title = this.add
-            .text(512, 460, "Main Menu", {
+            .text(512, 460, "RushAPI Start Screen", {
                 fontFamily: "Arial Black",
                 fontSize: 38,
                 color: "#ffffff",
@@ -39,7 +41,7 @@ export class MainMenu extends Scene implements ChangeableScene {
             this.logoTween = null;
         }
 
-        this.scene.start("Level1");
+        this.scene.start("MainGame");
     }
 
     moveSprite(callback: ({ x, y }: { x: number; y: number }) => void) {
