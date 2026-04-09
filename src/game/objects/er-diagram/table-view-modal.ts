@@ -6,6 +6,20 @@ interface EditableFieldRef {
     column: string;
 }
 
+type MutationKind = "none" | "insert" | "update" | "delete";
+
+interface TableViewModalHooks {
+    onFieldEdited?: () => void;
+    onEditsConfirmed?: (payload: {
+        entityType: EntityType;
+        mutation: MutationKind;
+    }) => void;
+}
+
+interface TableViewShowOptions {
+    allowEditing?: boolean;
+}
+
 export class TableViewModal {
     private readonly scene: Phaser.Scene;
     private readonly container: Phaser.GameObjects.Container;
@@ -16,6 +30,8 @@ export class TableViewModal {
     private readonly closeButton: Phaser.GameObjects.Text;
     private readonly editButton: Phaser.GameObjects.Text;
     private readonly confirmButton: Phaser.GameObjects.Text;
+    private readonly addRowButton: Phaser.GameObjects.Text;
+    private readonly deleteRowButton: Phaser.GameObjects.Text;
     private readonly editorContainer: Phaser.GameObjects.Container;
     private readonly editorObjects: Phaser.GameObjects.GameObject[] = [];
     private isEditMode = false;
@@ -23,10 +39,13 @@ export class TableViewModal {
     private currentRows: RowData[] = [];
     private stagedRows: RowData[] = [];
     private activeField?: EditableFieldRef;
+    private canEditCurrentTable = true;
+    private readonly hooks?: TableViewModalHooks;
     private readonly keyboardHandler: (event: KeyboardEvent) => void;
 
-    constructor(scene: Phaser.Scene) {
+    constructor(scene: Phaser.Scene, hooks?: TableViewModalHooks) {
         this.scene = scene;
+        this.hooks = hooks;
         this.background = scene.add.rectangle(0, 0, 760, 360, 0xffffff, 1);
         this.background.setStrokeStyle(3, 0x000000, 1);
         this.background.setOrigin(0.5);
@@ -69,6 +88,30 @@ export class TableViewModal {
         this.confirmButton.on("pointerdown", () => this.confirmEdits());
         this.confirmButton.setVisible(false);
 
+        this.addRowButton = scene.add
+            .text(120, -160, "+ Row", {
+                color: "#ffffff",
+                fontSize: "16px",
+                fontStyle: "bold",
+                backgroundColor: "#1a5fb4",
+                padding: { left: 8, right: 8, top: 4, bottom: 4 },
+            })
+            .setInteractive({ useHandCursor: true });
+        this.addRowButton.on("pointerdown", () => this.addRow());
+        this.addRowButton.setVisible(false);
+
+        this.deleteRowButton = scene.add
+            .text(30, -160, "- Row", {
+                color: "#ffffff",
+                fontSize: "16px",
+                fontStyle: "bold",
+                backgroundColor: "#b00020",
+                padding: { left: 8, right: 8, top: 4, bottom: 4 },
+            })
+            .setInteractive({ useHandCursor: true });
+        this.deleteRowButton.on("pointerdown", () => this.deleteActiveRow());
+        this.deleteRowButton.setVisible(false);
+
         this.tableText = scene.add.text(-350, -120, "", {
             color: "#222",
             fontSize: "14px",
@@ -94,6 +137,8 @@ export class TableViewModal {
             this.editorContainer,
             this.hintText,
             this.confirmButton,
+            this.addRowButton,
+            this.deleteRowButton,
             this.editButton,
             this.closeButton,
         ]);
@@ -107,8 +152,9 @@ export class TableViewModal {
         });
     }
 
-    show(entityType: EntityType, rows: RowData[]) {
+    show(entityType: EntityType, rows: RowData[], options?: TableViewShowOptions) {
         this.currentEntityType = entityType;
+        this.canEditCurrentTable = options?.allowEditing ?? true;
         this.currentRows = rows;
         this.stagedRows = rows.map((row) => ({ ...row }));
         this.activeField = undefined;
@@ -123,6 +169,7 @@ export class TableViewModal {
         this.currentRows = [];
         this.stagedRows = [];
         this.activeField = undefined;
+        this.canEditCurrentTable = true;
         this.isEditMode = false;
         this.container.setVisible(false);
     }
@@ -172,6 +219,8 @@ export class TableViewModal {
         this.tableText.setVisible(!this.isEditMode);
         this.editorContainer.setVisible(this.isEditMode);
         this.confirmButton.setVisible(this.isEditMode);
+        this.addRowButton.setVisible(this.isEditMode);
+        this.deleteRowButton.setVisible(this.isEditMode);
         this.editButton.setColor(this.isEditMode ? "#0b8f08" : "#1a5fb4");
 
         if (this.isEditMode) {
@@ -184,12 +233,17 @@ export class TableViewModal {
         this.hintText.setText(
             this.isEditMode
                 ? "Edit mode on. Click a value cell and type. Confirm to save. ID fields are read-only."
-                : "Click ✎ to edit values directly in the modal. ID fields are read-only.",
+                : this.canEditCurrentTable
+                  ? "Click ✎ to edit values directly in the modal. ID fields are read-only."
+                  : "Select a request type first, then reopen this table to edit data.",
         );
     }
 
     private toggleEditMode() {
         if (!this.currentEntityType) {
+            return;
+        }
+        if (!this.canEditCurrentTable) {
             return;
         }
 
@@ -202,11 +256,28 @@ export class TableViewModal {
     }
 
     private confirmEdits() {
-        if (!this.isEditMode || this.currentRows.length === 0) {
+        if (!this.isEditMode) {
             return;
         }
+        const beforeRows = this.currentRows.map((row) => ({ ...row }));
+        const afterRows = this.stagedRows.map((row) => ({ ...row }));
         for (let index = 0; index < this.currentRows.length; index += 1) {
             Object.assign(this.currentRows[index], this.stagedRows[index]);
+        }
+        if (this.currentRows.length > this.stagedRows.length) {
+            this.currentRows.length = this.stagedRows.length;
+        }
+        if (this.stagedRows.length > this.currentRows.length) {
+            for (let index = this.currentRows.length; index < this.stagedRows.length; index += 1) {
+                this.currentRows.push({ ...this.stagedRows[index] });
+            }
+        }
+        const mutation = this.detectMutation(beforeRows, afterRows);
+        if (this.currentEntityType) {
+            this.hooks?.onEditsConfirmed?.({
+                entityType: this.currentEntityType,
+                mutation,
+            });
         }
         this.isEditMode = false;
         this.activeField = undefined;
@@ -312,6 +383,7 @@ export class TableViewModal {
                 nextValue,
                 this.currentRows[rowIndex]?.[column],
             );
+            this.hooks?.onFieldEdited?.();
             this.renderEditorFields();
             return;
         }
@@ -328,6 +400,48 @@ export class TableViewModal {
             nextValue,
             this.currentRows[rowIndex]?.[column],
         );
+        this.hooks?.onFieldEdited?.();
+        this.renderEditorFields();
+    }
+
+    private addRow() {
+        if (!this.isEditMode || this.currentEntityType === undefined) {
+            return;
+        }
+        const referenceRow = this.stagedRows[0] ?? this.currentRows[0];
+        const newRow: RowData = {};
+        if (referenceRow) {
+            for (const [column, value] of Object.entries(referenceRow)) {
+                if (column.toLowerCase() === "id") {
+                    newRow[column] = this.buildNextId();
+                    continue;
+                }
+                if (typeof value === "number") {
+                    newRow[column] = 0;
+                } else if (typeof value === "boolean") {
+                    newRow[column] = false;
+                } else {
+                    newRow[column] = "";
+                }
+            }
+        } else {
+            newRow.id = this.buildNextId();
+        }
+        this.stagedRows.push(newRow);
+        this.activeField = undefined;
+        this.renderEditorFields();
+    }
+
+    private deleteActiveRow() {
+        if (!this.isEditMode || !this.activeField) {
+            return;
+        }
+        const { rowIndex } = this.activeField;
+        if (rowIndex < 0 || rowIndex >= this.stagedRows.length) {
+            return;
+        }
+        this.stagedRows.splice(rowIndex, 1);
+        this.activeField = undefined;
         this.renderEditorFields();
     }
 
@@ -344,5 +458,37 @@ export class TableViewModal {
             return nextValue.toLowerCase() === "true";
         }
         return nextValue;
+    }
+
+    private detectMutation(beforeRows: RowData[], afterRows: RowData[]): MutationKind {
+        if (afterRows.length > beforeRows.length) {
+            return "insert";
+        }
+        if (afterRows.length < beforeRows.length) {
+            return "delete";
+        }
+        const beforeJson = JSON.stringify(beforeRows);
+        const afterJson = JSON.stringify(afterRows);
+        return beforeJson === afterJson ? "none" : "update";
+    }
+
+    private buildNextId(): string {
+        const allIds = [...this.currentRows, ...this.stagedRows]
+            .map((row) => String(row.id ?? ""))
+            .filter((id) => id.length > 0);
+        let maxNumeric = 0;
+        let prefix = "r";
+        for (const id of allIds) {
+            const match = id.match(/^([a-zA-Z]+)(\d+)$/);
+            if (!match) {
+                continue;
+            }
+            prefix = match[1];
+            const numeric = Number(match[2]);
+            if (numeric > maxNumeric) {
+                maxNumeric = numeric;
+            }
+        }
+        return `${prefix}${maxNumeric + 1}`;
     }
 }

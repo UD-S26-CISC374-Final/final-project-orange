@@ -62,6 +62,30 @@ export interface RelationshipDef {
     label: string;
 }
 
+export type ApiRequestMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+export interface ApiRequestObjective {
+    method: ApiRequestMethod;
+    targetType: EntityType;
+    description: string;
+}
+
+export interface RequestValidationResult {
+    ok: boolean;
+    errorCode: string;
+    message: string;
+}
+
+export const REQUEST_ERROR_CODES = {
+    NO_ACTIVE_REQUEST: "REQ_000",
+    METHOD_NOT_SELECTED: "REQ_001",
+    METHOD_MISMATCH: "REQ_002",
+    NO_ACTION_TRACE: "REQ_003",
+    WRONG_TARGET_TABLE: "REQ_004",
+    WRONG_MUTATION_KIND: "REQ_005",
+    RELATIONAL_RULE_FAILED: "REQ_006",
+} as const;
+
 export const RELATIONSHIPS: RelationshipDef[] = [
     {
         fromType: "USER",
@@ -341,6 +365,16 @@ export class ERDiagram {
     private xOffset: number;
     private yOffset: number;
     private tableViewModal: TableViewModal;
+    private selectedRequestMethod?: ApiRequestMethod;
+    private currentRequest?: ApiRequestObjective;
+    private actionTrace = {
+        openedTables: new Set<EntityType>(),
+        editCount: 0,
+        confirmations: [] as Array<{
+            entityType: EntityType;
+            mutation: "none" | "insert" | "update" | "delete";
+        }>,
+    };
 
     constructor(scene: Phaser.Scene, options?: ERDiagramOptions) {
         this.scene = scene;
@@ -354,7 +388,130 @@ export class ERDiagram {
 
         this.createViews();
         this.wireInteractions();
-        this.tableViewModal = new TableViewModal(scene);
+        this.tableViewModal = new TableViewModal(scene, {
+            onFieldEdited: () => {
+                this.actionTrace.editCount += 1;
+            },
+            onEditsConfirmed: ({ entityType, mutation }) => {
+                this.actionTrace.confirmations.push({ entityType, mutation });
+            },
+        });
+    }
+
+    setSelectedRequestMethod(method: ApiRequestMethod) {
+        this.selectedRequestMethod = method;
+    }
+
+    getSelectedRequestMethod(): ApiRequestMethod | undefined {
+        return this.selectedRequestMethod;
+    }
+
+    clearSelectedRequestMethod() {
+        this.selectedRequestMethod = undefined;
+    }
+
+    startRequest(request: ApiRequestObjective) {
+        this.currentRequest = request;
+        this.resetActionTrace();
+    }
+
+    getCurrentRequest(): ApiRequestObjective | undefined {
+        return this.currentRequest;
+    }
+
+    submitCurrentRequest(): RequestValidationResult {
+        if (!this.currentRequest) {
+            return {
+                ok: false,
+                errorCode: REQUEST_ERROR_CODES.NO_ACTIVE_REQUEST,
+                message: "No active request to submit.",
+            };
+        }
+        if (!this.selectedRequestMethod) {
+            return {
+                ok: false,
+                errorCode: REQUEST_ERROR_CODES.METHOD_NOT_SELECTED,
+                message: "Select a request type before performing actions.",
+            };
+        }
+        if (this.selectedRequestMethod !== this.currentRequest.method) {
+            return {
+                ok: false,
+                errorCode: REQUEST_ERROR_CODES.METHOD_MISMATCH,
+                message: `Selected ${this.selectedRequestMethod} but request requires ${this.currentRequest.method}.`,
+            };
+        }
+
+        const targetType = this.currentRequest.targetType;
+        const openedTarget = this.actionTrace.openedTables.has(targetType);
+        let targetConfirmation:
+            | { entityType: EntityType; mutation: "none" | "insert" | "update" | "delete" }
+            | undefined;
+        for (let index = this.actionTrace.confirmations.length - 1; index >= 0; index -= 1) {
+            const entry = this.actionTrace.confirmations[index];
+            if (entry.entityType === targetType) {
+                targetConfirmation = entry;
+                break;
+            }
+        }
+
+        switch (this.currentRequest.method) {
+            case "GET":
+                if (!openedTarget) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
+                        message: "Open the target table before submitting GET.",
+                    };
+                }
+                if (targetConfirmation && targetConfirmation.mutation !== "none") {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.WRONG_MUTATION_KIND,
+                        message: "GET request must not confirm table mutations.",
+                    };
+                }
+                break;
+            case "POST":
+            case "PUT":
+            case "DELETE": {
+                if (!targetConfirmation) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.WRONG_TARGET_TABLE,
+                        message: "Confirm changes on the target table before submitting.",
+                    };
+                }
+                const expectedMutation =
+                    this.currentRequest.method === "POST"
+                        ? "insert"
+                        : this.currentRequest.method === "PUT"
+                          ? "update"
+                          : "delete";
+                if (targetConfirmation.mutation !== expectedMutation) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.WRONG_MUTATION_KIND,
+                        message: `Expected ${expectedMutation} action on ${targetType}.`,
+                    };
+                }
+                const relationalErrors = this.validateRules();
+                if (relationalErrors.length > 0) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.RELATIONAL_RULE_FAILED,
+                        message: relationalErrors[0],
+                    };
+                }
+                break;
+            }
+        }
+
+        return {
+            ok: true,
+            errorCode: "REQ_OK",
+            message: `Request ${this.currentRequest.method} on ${targetType} completed.`,
+        };
     }
 
     revealTable(type: EntityType) {
@@ -423,11 +580,14 @@ export class ERDiagram {
 
     private selectNode(entityType: EntityType) {
         if (this.selectedType === entityType) {
+            this.actionTrace.openedTables.add(entityType);
             const tableMap = this.store.getTableForType(entityType);
             const rows = Array.from(tableMap.values()).map(
                 (value) => value as Record<string, unknown>,
             );
-            this.tableViewModal.show(entityType, rows);
+            this.tableViewModal.show(entityType, rows, {
+                allowEditing: Boolean(this.selectedRequestMethod),
+            });
             return;
         }
 
@@ -442,6 +602,12 @@ export class ERDiagram {
         for (const edge of this.edges) {
             edge.redraw();
         }
+    }
+
+    private resetActionTrace() {
+        this.actionTrace.openedTables.clear();
+        this.actionTrace.editCount = 0;
+        this.actionTrace.confirmations = [];
     }
 }
 
