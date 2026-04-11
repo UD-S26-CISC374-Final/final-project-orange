@@ -461,7 +461,20 @@ export function buildDefaultStore(): ERStore {
         feeling: "focused",
         money: 900,
     });
-
+    store.users.set("u3",{
+        id: "u3",
+        name: "Carol",
+        age: 28,
+        feeling: "angry",
+        money: 3200,
+    });
+    store.users.set("u4", {
+        id: "u4",
+        name: "David",
+        age: 48,
+        feeling: "87000",
+        money: 1500,
+    });
     store.pets.set("p1", {
         id: "p1",
         species: "dog",
