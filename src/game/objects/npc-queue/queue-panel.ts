@@ -8,6 +8,7 @@ const GAP = 24;
 export class QueuePanel extends Phaser.GameObjects.Container {
     private queueManager: QueueManager;
     private cards: Phaser.GameObjects.Container[] = [];
+    private portraitByNpcId = new Map<string, Phaser.GameObjects.Image>();
     private onSelect: (entry: QueueEntry) => void;
 
     constructor(
@@ -27,6 +28,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
     draw() {
         this.cards.forEach(c => c.destroy());
         this.cards = [];
+        this.portraitByNpcId.clear();
 
         const queue = this.queueManager.getQueue();
 
@@ -52,6 +54,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
 
         const portrait = this.scene.add.image(SPRITE_WIDTH / 2, SPRITE_HEIGHT / 2 + 24, "npc");
         portrait.setDisplaySize(SPRITE_WIDTH, SPRITE_HEIGHT);
+        this.portraitByNpcId.set(entry.npc.id, portrait);
         card.add(portrait);
 
         const hitArea = this.scene.add
@@ -75,5 +78,28 @@ export class QueuePanel extends Phaser.GameObjects.Container {
 
         card.add(hitArea);
         return card;
+    }
+
+    /**
+     * Brief green tint on the NPC portrait (call before removing them from the queue).
+     */
+    flashNpcSuccess(npcId: string, onComplete?: () => void): void {
+        const portrait = this.portraitByNpcId.get(npcId);
+        if (!portrait) {
+            onComplete?.();
+            return;
+        }
+        const scene = this.scene;
+        portrait.setTint(0x55ff66);
+        scene.time.delayedCall(100, () => {
+            portrait.clearTint();
+            scene.time.delayedCall(50, () => {
+                portrait.setTint(0x44ee55);
+                scene.time.delayedCall(100, () => {
+                    portrait.clearTint();
+                    onComplete?.();
+                });
+            });
+        });
     }
 }

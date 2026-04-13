@@ -1,4 +1,8 @@
 export type ID = string;
+import {
+    METHOD_TABLE_STROKE,
+    NO_METHOD_TABLE_STROKE,
+} from "../../helpers/method-ui-colors";
 import { TableViewModal } from "./table-view-modal";
 
 export type EntityType =
@@ -297,8 +301,13 @@ class EntityNodeView extends Phaser.GameObjects.Container {
         });
     }
 
-    setSelected(isSelected: boolean) {
-        this.bg.setStrokeStyle(3, isSelected ? 0xff9800 : 0x000000, 1);
+    setSelected(isSelected: boolean, highlightColor?: number) {
+        if (!isSelected) {
+            this.bg.setStrokeStyle(3, 0x000000, 1);
+            return;
+        }
+        const stroke = highlightColor ?? NO_METHOD_TABLE_STROKE;
+        this.bg.setStrokeStyle(4, stroke, 1);
     }
 
     markDragged() {
@@ -409,6 +418,7 @@ export class ERDiagram {
 
     setSelectedRequestMethod(method: ApiRequestMethod) {
         this.selectedRequestMethod = method;
+        this.refreshTableHighlightStyles();
     }
 
     getSelectedRequestMethod(): ApiRequestMethod | undefined {
@@ -417,6 +427,9 @@ export class ERDiagram {
 
     clearSelectedRequestMethod() {
         this.selectedRequestMethod = undefined;
+        this.selectedType = undefined;
+        this.tableViewModal.hide();
+        this.refreshTableHighlightStyles();
     }
 
     startRequest(request: ApiRequestObjective) {
@@ -426,6 +439,11 @@ export class ERDiagram {
 
     getCurrentRequest(): ApiRequestObjective | undefined {
         return this.currentRequest;
+    }
+
+    clearCurrentRequest() {
+        this.currentRequest = undefined;
+        this.resetActionTrace();
     }
 
     submitCurrentRequest(): RequestValidationResult {
@@ -673,8 +691,21 @@ export class ERDiagram {
 
         this.selectedType = entityType;
         this.tableViewModal.hide();
+        this.refreshTableHighlightStyles();
+    }
+
+    private refreshTableHighlightStyles() {
+        const stroke = this.selectedRequestMethod
+            ? METHOD_TABLE_STROKE[this.selectedRequestMethod]
+            : NO_METHOD_TABLE_STROKE;
         for (const [type, node] of this.nodes.entries()) {
-            node.setSelected(type === entityType);
+            const isSelected =
+                this.selectedType !== undefined && type === this.selectedType;
+            if (isSelected) {
+                node.setSelected(true, stroke);
+            } else {
+                node.setSelected(false);
+            }
         }
     }
 

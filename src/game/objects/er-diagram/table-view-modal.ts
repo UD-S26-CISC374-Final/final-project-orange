@@ -1,4 +1,5 @@
 import type { ApiRequestMethod, EntityType } from "./diagram-handler";
+import { METHOD_MODAL_SURFACE, METHOD_UI_COLORS } from "../../helpers/method-ui-colors";
 
 type RowData = Record<string, unknown>;
 
@@ -64,7 +65,13 @@ export class TableViewModal {
     private rowEditorActiveColumn?: string;
     private canEditCurrentTable = true;
     private currentPageIndex = 0;
+    /** Rows per page for compact read-only ASCII table. */
     private readonly rowsPerPage = 5;
+    /**
+     * GET / edit modes render each logical row as many lines; use one row per page
+     * so the modal stays within the fixed height and pagination is meaningful.
+     */
+    private readonly rowsPerPageExpanded = 1;
     private editorScrollOffset = 0;
     private editorContentHeight = 0;
     private readonly hooks?: TableViewModalHooks;
@@ -183,7 +190,7 @@ export class TableViewModal {
         this.deleteRowButton.setVisible(false);
 
         this.previousPageButton = scene.add
-            .text(-34, 145, "←", {
+            .text(-34, 158, "←", {
                 color: "#ffffff",
                 fontSize: "18px",
                 fontStyle: "bold",
@@ -194,7 +201,7 @@ export class TableViewModal {
         this.previousPageButton.on("pointerdown", () => this.goToPreviousPage());
 
         this.nextPageButton = scene.add
-            .text(34, 145, "→", {
+            .text(34, 158, "→", {
                 color: "#ffffff",
                 fontSize: "18px",
                 fontStyle: "bold",
@@ -204,7 +211,7 @@ export class TableViewModal {
             .setInteractive({ useHandCursor: true });
         this.nextPageButton.on("pointerdown", () => this.goToNextPage());
 
-        this.pageText = scene.add.text(-140, 146, "Page 1/1", {
+        this.pageText = scene.add.text(-140, 159, "Page 1/1", {
             color: "#111",
             fontSize: "14px",
             fontStyle: "bold",
@@ -221,7 +228,7 @@ export class TableViewModal {
         this.editorContainer = scene.add.container(0, 0, []);
         this.editorContainer.setVisible(false);
 
-        this.hintText = scene.add.text(-350, 145, "", {
+        this.hintText = scene.add.text(-350, 108, "", {
             color: "#444",
             fontSize: "13px",
             fontStyle: "italic",
@@ -392,7 +399,21 @@ export class TableViewModal {
         return values.map((value, index) => value.padEnd(widths[index], " ")).join(" | ");
     }
 
+    private getModalPalette() {
+        const mode = this.currentMode ?? "GET";
+        return METHOD_MODAL_SURFACE[mode];
+    }
+
+    /** Slice size for pagination: compact text vs tall per-row editors. */
+    private getEffectiveRowsPerPage(): number {
+        if (this.currentMode === "GET" || this.isEditMode) {
+            return this.rowsPerPageExpanded;
+        }
+        return this.rowsPerPage;
+    }
+
     private renderTable() {
+        const pal = this.getModalPalette();
         const isGetMode = this.currentMode === "GET";
         this.tableText.setVisible(!this.isEditMode && !isGetMode);
         this.editorContainer.setVisible(this.isEditMode || isGetMode);
@@ -401,7 +422,10 @@ export class TableViewModal {
         this.deleteRowButton.setVisible(
             this.isEditMode && this.currentMode === "DELETE",
         );
-        this.editButton.setColor(this.isEditMode ? "#0b8f08" : "#1a5fb4");
+        this.editButton.setColor(this.isEditMode ? "#0b8f08" : pal.accentText);
+        if (this.isEditMode && this.currentMode === "POST") {
+            this.addRowButton.setBackgroundColor(METHOD_UI_COLORS.POST.background);
+        }
         this.editButton.setAlpha(
             !this.canEditCurrentTable || this.currentMode === "GET" ? 0.5 : 1,
         );
@@ -511,7 +535,9 @@ export class TableViewModal {
         );
 
         const pageRows = this.getCurrentPageRows(this.stagedRows);
-        const pageStart = this.currentPageIndex * this.rowsPerPage;
+        const pageSize = this.getEffectiveRowsPerPage();
+        const pageStart = this.currentPageIndex * pageSize;
+        const pal = this.getModalPalette();
         let y = -120 - this.editorScrollOffset;
         for (let localIndex = 0; localIndex < pageRows.length; localIndex += 1) {
             const rowIndex = pageStart + localIndex;
@@ -602,7 +628,7 @@ export class TableViewModal {
                         : fieldMarkedForDelete
                           ? "#ffffff"
                           : editable
-                            ? "#1a5fb4"
+                            ? pal.accentText
                             : "#666",
                     fontSize: "13px",
                     backgroundColor: rowMarkedForDelete
@@ -610,7 +636,7 @@ export class TableViewModal {
                         : fieldMarkedForDelete
                           ? "#c62828"
                           : editable
-                            ? "#eaf2ff"
+                            ? pal.surface
                             : "#f1f1f1",
                     padding: { left: 4, right: 4, top: 2, bottom: 2 },
                 });
@@ -721,7 +747,9 @@ export class TableViewModal {
             }, new Set<string>()),
         );
         const pageRows = this.getCurrentPageRows(this.currentRows);
-        const pageStart = this.currentPageIndex * this.rowsPerPage;
+        const pageSize = this.getEffectiveRowsPerPage();
+        const pageStart = this.currentPageIndex * pageSize;
+        const pal = this.getModalPalette();
         let y = -120;
         for (let localIndex = 0; localIndex < pageRows.length; localIndex += 1) {
             const rowIndex = pageStart + localIndex;
@@ -734,19 +762,19 @@ export class TableViewModal {
                     color: rowSelected ? "#ffffff" : "#111",
                     fontSize: "13px",
                     fontStyle: "bold",
-                    backgroundColor: rowSelected ? "#1a5fb4" : "#dfe8ff",
+                    backgroundColor: rowSelected ? pal.selectedStrong : pal.surface,
                     padding: { left: 4, right: 4, top: 2, bottom: 2 },
                 })
                 .setInteractive({ useHandCursor: true });
             rowText
                 .on("pointerover", () => {
                     if (!this.selectedGetTargets.has(rowTarget)) {
-                        rowText.setBackgroundColor("#c9ddff");
+                        rowText.setBackgroundColor(pal.surfaceHover);
                     }
                 })
                 .on("pointerout", () => {
                     if (!this.selectedGetTargets.has(rowTarget)) {
-                        rowText.setBackgroundColor("#dfe8ff");
+                        rowText.setBackgroundColor(pal.surface);
                     }
                 });
             rowText.on("pointerdown", () => this.toggleGetTarget(rowTarget));
@@ -760,21 +788,23 @@ export class TableViewModal {
                 const value = String(this.currentRows[rowIndex][column] ?? "");
                 const fieldText = this.scene.add
                     .text(-335, y, `${column}: ${value}`, {
-                        color: fieldSelected ? "#ffffff" : "#1a5fb4",
+                        color: fieldSelected ? "#ffffff" : pal.accentText,
                         fontSize: "13px",
-                        backgroundColor: fieldSelected ? "#1a5fb4" : "#eaf2ff",
+                        backgroundColor: fieldSelected
+                            ? pal.selectedStrong
+                            : pal.surface,
                         padding: { left: 4, right: 4, top: 2, bottom: 2 },
                     })
                     .setInteractive({ useHandCursor: true });
                 fieldText
                     .on("pointerover", () => {
                         if (!this.selectedGetTargets.has(fieldTarget)) {
-                            fieldText.setBackgroundColor("#d8e9ff");
+                            fieldText.setBackgroundColor(pal.surfaceHover);
                         }
                     })
                     .on("pointerout", () => {
                         if (!this.selectedGetTargets.has(fieldTarget)) {
-                            fieldText.setBackgroundColor("#eaf2ff");
+                            fieldText.setBackgroundColor(pal.surface);
                         }
                     });
                 fieldText.on("pointerdown", () => this.toggleGetTarget(fieldTarget));
@@ -874,11 +904,15 @@ export class TableViewModal {
         const rows = this.isEditMode ? this.stagedRows : this.currentRows;
         this.clampCurrentPage(rows);
         const totalPages = this.getTotalPages(rows);
-        const hasMultiplePages = totalPages > 1;
-        this.previousPageButton.setVisible(hasMultiplePages);
-        this.nextPageButton.setVisible(hasMultiplePages);
-        this.pageText.setVisible(hasMultiplePages);
+        const hasRows = rows.length > 0;
+        this.previousPageButton.setVisible(hasRows);
+        this.nextPageButton.setVisible(hasRows);
+        this.pageText.setVisible(hasRows);
         this.pageText.setText(`Page ${this.currentPageIndex + 1}/${totalPages}`);
+        const atFirst = this.currentPageIndex <= 0;
+        const atLast = this.currentPageIndex >= totalPages - 1;
+        this.previousPageButton.setAlpha(atFirst ? 0.35 : 1);
+        this.nextPageButton.setAlpha(atLast ? 0.35 : 1);
     }
 
     private goToPreviousPage() {
@@ -900,12 +934,14 @@ export class TableViewModal {
     }
 
     private getCurrentPageRows(rows: RowData[]): RowData[] {
-        const start = this.currentPageIndex * this.rowsPerPage;
-        return rows.slice(start, start + this.rowsPerPage);
+        const n = this.getEffectiveRowsPerPage();
+        const start = this.currentPageIndex * n;
+        return rows.slice(start, start + n);
     }
 
     private getTotalPages(rows: RowData[]): number {
-        return Math.max(1, Math.ceil(rows.length / this.rowsPerPage));
+        const n = this.getEffectiveRowsPerPage();
+        return Math.max(1, Math.ceil(rows.length / n));
     }
 
     private clampCurrentPage(rows: RowData[]) {
@@ -1013,6 +1049,7 @@ export class TableViewModal {
             object.destroy();
         }
         this.rowEditorObjects.length = 0;
+        const pal = this.getModalPalette();
         let y = -102;
         for (const column of this.rowEditorColumns) {
             const readonly = this.isReadonlyColumn(column);
@@ -1024,9 +1061,9 @@ export class TableViewModal {
             });
             const value = String(this.rowEditorDraft[column] ?? "");
             const valueText = this.scene.add.text(-34, y, isActive ? `${value}_` : value, {
-                color: readonly ? "#666" : "#1a5fb4",
+                color: readonly ? "#666" : pal.accentText,
                 fontSize: "14px",
-                backgroundColor: readonly ? "#f1f1f1" : "#eaf2ff",
+                backgroundColor: readonly ? "#f1f1f1" : pal.surface,
                 padding: { left: 4, right: 4, top: 2, bottom: 2 },
             });
             if (!readonly) {
