@@ -62,6 +62,34 @@ export interface RelationshipDef {
     label: string;
 }
 
+export type ApiRequestMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+export interface ApiRequestObjective {
+    method: ApiRequestMethod;
+    targetType: EntityType;
+    description: string;
+    targetRowId?: string;
+    targetField?: string;
+    /** For POST: non-id columns that the new row must match (e.g. USER name/age/feeling/money). */
+    expectedInsertFields?: Record<string, unknown>;
+}
+
+export interface RequestValidationResult {
+    ok: boolean;
+    errorCode: string;
+    message: string;
+}
+
+export const REQUEST_ERROR_CODES = {
+    NO_ACTIVE_REQUEST: "REQ_000",
+    METHOD_NOT_SELECTED: "REQ_001",
+    METHOD_MISMATCH: "REQ_002",
+    NO_ACTION_TRACE: "REQ_003",
+    WRONG_TARGET_TABLE: "REQ_004",
+    WRONG_MUTATION_KIND: "REQ_005",
+    RELATIONAL_RULE_FAILED: "REQ_006",
+} as const;
+
 export const RELATIONSHIPS: RelationshipDef[] = [
     {
         fromType: "USER",
@@ -341,6 +369,18 @@ export class ERDiagram {
     private xOffset: number;
     private yOffset: number;
     private tableViewModal: TableViewModal;
+    private selectedRequestMethod?: ApiRequestMethod;
+    private currentRequest?: ApiRequestObjective;
+    private actionTrace = {
+        openedTables: new Set<EntityType>(),
+        editCount: 0,
+        getSelections: new Map<EntityType, string[]>(),
+        confirmations: [] as Array<{
+            entityType: EntityType;
+            mutation: "none" | "insert" | "update" | "delete";
+            rows: Record<string, unknown>[];
+        }>,
+    };
 
     constructor(scene: Phaser.Scene, options?: ERDiagramOptions) {
         this.scene = scene;
@@ -354,7 +394,200 @@ export class ERDiagram {
 
         this.createViews();
         this.wireInteractions();
-        this.tableViewModal = new TableViewModal(scene);
+        this.tableViewModal = new TableViewModal(scene, {
+            onFieldEdited: () => {
+                this.actionTrace.editCount += 1;
+            },
+            onGetSelectionChanged: ({ entityType, selectedTargets }) => {
+                this.actionTrace.getSelections.set(entityType, selectedTargets);
+            },
+            onEditsConfirmed: ({ entityType, mutation, rows }) => {
+                this.actionTrace.confirmations.push({ entityType, mutation, rows });
+            },
+        });
+    }
+
+    setSelectedRequestMethod(method: ApiRequestMethod) {
+        this.selectedRequestMethod = method;
+    }
+
+    getSelectedRequestMethod(): ApiRequestMethod | undefined {
+        return this.selectedRequestMethod;
+    }
+
+    clearSelectedRequestMethod() {
+        this.selectedRequestMethod = undefined;
+    }
+
+    startRequest(request: ApiRequestObjective) {
+        this.currentRequest = request;
+        this.resetActionTrace();
+    }
+
+    getCurrentRequest(): ApiRequestObjective | undefined {
+        return this.currentRequest;
+    }
+
+    submitCurrentRequest(): RequestValidationResult {
+        if (!this.currentRequest) {
+            return {
+                ok: false,
+                errorCode: REQUEST_ERROR_CODES.NO_ACTIVE_REQUEST,
+                message: "No active request to submit.",
+            };
+        }
+        if (!this.selectedRequestMethod) {
+            return {
+                ok: false,
+                errorCode: REQUEST_ERROR_CODES.METHOD_NOT_SELECTED,
+                message: "Select a request type before performing actions.",
+            };
+        }
+        if (this.selectedRequestMethod !== this.currentRequest.method) {
+            return {
+                ok: false,
+                errorCode: REQUEST_ERROR_CODES.METHOD_MISMATCH,
+                message: `Selected ${this.selectedRequestMethod} but request requires ${this.currentRequest.method}.`,
+            };
+        }
+
+        const targetType = this.currentRequest.targetType;
+        const openedTarget = this.actionTrace.openedTables.has(targetType);
+        let targetConfirmation:
+            | {
+                  entityType: EntityType;
+                  mutation: "none" | "insert" | "update" | "delete";
+                  rows: Record<string, unknown>[];
+              }
+            | undefined;
+        for (let index = this.actionTrace.confirmations.length - 1; index >= 0; index -= 1) {
+            const entry = this.actionTrace.confirmations[index];
+            if (entry.entityType === targetType) {
+                targetConfirmation = entry;
+                break;
+            }
+        }
+
+        switch (this.currentRequest.method) {
+            case "GET":
+                if (!openedTarget) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
+                        message: "Open the target table before submitting GET.",
+                    };
+                }
+                const selectionCount =
+                    this.actionTrace.getSelections.get(targetType) ?? [];
+                if (selectionCount.length === 0) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
+                        message:
+                            "GET request must select at least one row or field in the target table.",
+                    };
+                }
+                if (targetConfirmation && targetConfirmation.mutation !== "none") {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.WRONG_MUTATION_KIND,
+                        message: "GET request must not confirm table mutations.",
+                    };
+                }
+                if (this.currentRequest.targetRowId || this.currentRequest.targetField) {
+                    const requiredRow = this.currentRequest.targetRowId;
+                    const requiredField = this.currentRequest.targetField;
+                    const selectedTargets = this.actionTrace.getSelections.get(targetType) ?? [];
+                    if (requiredRow && requiredField) {
+                        const requiredToken = `field:${requiredRow}:${requiredField}`;
+                        if (!selectedTargets.includes(requiredToken)) {
+                            return {
+                                ok: false,
+                                errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
+                                message: `GET must include field ${requiredField} on row id ${requiredRow}.`,
+                            };
+                        }
+                    } else if (requiredRow) {
+                        const rowToken = `row:${requiredRow}`;
+                        const hasRowSelection = selectedTargets.some(
+                            (token) =>
+                                token === rowToken || token.startsWith(`field:${requiredRow}:`),
+                        );
+                        if (!hasRowSelection) {
+                            return {
+                                ok: false,
+                                errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
+                                message: `GET must include selection for row id ${requiredRow}.`,
+                            };
+                        }
+                    }
+                }
+                break;
+            case "POST":
+            case "PUT":
+            case "DELETE": {
+                if (!targetConfirmation) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.WRONG_TARGET_TABLE,
+                        message: "Confirm changes on the target table before submitting.",
+                    };
+                }
+                const expectedMutation =
+                    this.currentRequest.method === "POST"
+                        ? "insert"
+                        : this.currentRequest.method === "PUT"
+                          ? "update"
+                          : "delete";
+                if (targetConfirmation.mutation !== expectedMutation) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.WRONG_MUTATION_KIND,
+                        message: `Expected ${expectedMutation} action on ${targetType}.`,
+                    };
+                }
+                const originalRows = Array.from(
+                    this.store.getTableForType(targetType).values(),
+                ).map((row) => row as Record<string, unknown>);
+                const specificError = this.validateSpecificMutationRequest(
+                    this.currentRequest,
+                    originalRows,
+                    targetConfirmation.rows,
+                );
+                if (specificError) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
+                        message: specificError,
+                    };
+                }
+                const relationalErrors = this.validateRulesWithStagedRows(
+                    targetType,
+                    targetConfirmation.rows,
+                );
+                if (relationalErrors.length > 0) {
+                    return {
+                        ok: false,
+                        errorCode: REQUEST_ERROR_CODES.RELATIONAL_RULE_FAILED,
+                        message: relationalErrors[0],
+                    };
+                }
+                break;
+            }
+        }
+        if (
+            this.currentRequest.method === "POST" ||
+            this.currentRequest.method === "PUT" ||
+            this.currentRequest.method === "DELETE"
+        ) {
+            this.applyRowsToStore(targetType, targetConfirmation?.rows ?? []);
+        }
+
+        return {
+            ok: true,
+            errorCode: "REQ_OK",
+            message: `Request ${this.currentRequest.method} on ${targetType} completed.`,
+        };
     }
 
     revealTable(type: EntityType) {
@@ -422,12 +655,19 @@ export class ERDiagram {
     }
 
     private selectNode(entityType: EntityType) {
+        if (!this.selectedRequestMethod) {
+            return;
+        }
         if (this.selectedType === entityType) {
+            this.actionTrace.openedTables.add(entityType);
             const tableMap = this.store.getTableForType(entityType);
             const rows = Array.from(tableMap.values()).map(
                 (value) => value as Record<string, unknown>,
             );
-            this.tableViewModal.show(entityType, rows);
+            this.tableViewModal.show(entityType, rows, {
+                allowEditing: Boolean(this.selectedRequestMethod),
+                mode: this.selectedRequestMethod,
+            });
             return;
         }
 
@@ -442,6 +682,131 @@ export class ERDiagram {
         for (const edge of this.edges) {
             edge.redraw();
         }
+    }
+
+    private resetActionTrace() {
+        this.actionTrace.openedTables.clear();
+        this.actionTrace.editCount = 0;
+        this.actionTrace.getSelections.clear();
+        this.actionTrace.confirmations = [];
+    }
+
+    private applyRowsToStore(entityType: EntityType, rows: Record<string, unknown>[]) {
+        const tableMap = this.store.getTableForType(entityType);
+        tableMap.clear();
+        for (const row of rows) {
+            const rowId = String(row.id ?? "");
+            if (!rowId) {
+                continue;
+            }
+            tableMap.set(rowId, row);
+        }
+    }
+
+    private validateRulesWithStagedRows(
+        entityType: EntityType,
+        stagedRows: Record<string, unknown>[],
+    ): string[] {
+        const tableMap = this.store.getTableForType(entityType);
+        const originalRows = Array.from(tableMap.values()).map(
+            (row) => row as Record<string, unknown>,
+        );
+        this.applyRowsToStore(entityType, stagedRows);
+        const errors = this.store.validateBasicRelationalRules();
+        this.applyRowsToStore(entityType, originalRows);
+        return errors;
+    }
+
+    private validateSpecificMutationRequest(
+        request: ApiRequestObjective,
+        beforeRows: Record<string, unknown>[],
+        afterRows: Record<string, unknown>[],
+    ): string | undefined {
+        if (request.method === "POST" && request.expectedInsertFields) {
+            const beforeIds = new Set(
+                beforeRows
+                    .map((row) => String(row.id ?? ""))
+                    .filter((id) => id.length > 0),
+            );
+            const inserted = afterRows.filter((row) => {
+                const id = String(row.id ?? "");
+                return id.length > 0 && !beforeIds.has(id);
+            });
+            if (inserted.length !== 1) {
+                return "POST must add exactly one new row matching the requested details.";
+            }
+            const newRow = inserted[0];
+            for (const [key, expected] of Object.entries(request.expectedInsertFields)) {
+                const actual = newRow[key];
+                if (!this.valuesMatchInsertExpectation(actual, expected)) {
+                    return `New row must have ${key} = ${String(expected)} (got ${String(actual)}).`;
+                }
+            }
+            return undefined;
+        }
+        if (!request.targetRowId) {
+            return undefined;
+        }
+        const beforeById = new Map(
+            beforeRows
+                .map((row) => [String(row.id ?? ""), row] as const)
+                .filter(([id]) => id.length > 0),
+        );
+        const afterById = new Map(
+            afterRows
+                .map((row) => [String(row.id ?? ""), row] as const)
+                .filter(([id]) => id.length > 0),
+        );
+        const beforeRow = beforeById.get(request.targetRowId);
+        const afterRow = afterById.get(request.targetRowId);
+        if (!beforeRow || !afterRow) {
+            return `Target row id ${request.targetRowId} is required for this request.`;
+        }
+
+        if (request.method === "PUT") {
+            if (request.targetField) {
+                if (beforeRow[request.targetField] === afterRow[request.targetField]) {
+                    return `PUT must modify ${request.targetField} on row id ${request.targetRowId}.`;
+                }
+                return undefined;
+            }
+            if (JSON.stringify(beforeRow) === JSON.stringify(afterRow)) {
+                return `PUT must modify row id ${request.targetRowId}.`;
+            }
+            return undefined;
+        }
+
+        if (request.method === "DELETE") {
+            if (request.targetField) {
+                if (afterRow[request.targetField] !== null) {
+                    return `DELETE must null ${request.targetField} on row id ${request.targetRowId}.`;
+                }
+                return undefined;
+            }
+            for (const key of Object.keys(afterRow)) {
+                if (key.toLowerCase().endsWith("id")) {
+                    continue;
+                }
+                if (afterRow[key] !== null) {
+                    return `DELETE must null non-id values for row id ${request.targetRowId}.`;
+                }
+            }
+        }
+        return undefined;
+    }
+
+    private valuesMatchInsertExpectation(actual: unknown, expected: unknown): boolean {
+        if (actual === expected) {
+            return true;
+        }
+        if (typeof expected === "number" && typeof actual === "string") {
+            const parsed = Number(actual);
+            return !Number.isNaN(parsed) && parsed === expected;
+        }
+        if (typeof expected === "number" && typeof actual === "number") {
+            return actual === expected;
+        }
+        return String(actual) === String(expected);
     }
 }
 
