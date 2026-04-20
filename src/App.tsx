@@ -45,6 +45,7 @@ function App() {
                 scene.changeScene();
             }
         }
+        (document.activeElement as HTMLElement)?.blur();
     };
 
     // Move the sprite in the MainMenu scene by invoking the moveSprite method
