@@ -836,6 +836,18 @@ export class TableViewModal {
             this.onRowEditorKeydown(event);
             return;
         }
+        if (!this.container.visible) {
+            return;
+        }
+        if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            this.goToPreviousPage();
+            return;
+        }
+        if (event.key === "ArrowRight") {
+            event.preventDefault();
+            this.goToNextPage();
+        }
     }
 
     private addRow() {

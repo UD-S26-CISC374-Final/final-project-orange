@@ -6,13 +6,20 @@ import {
     buildDefaultStore,
     type ApiRequestMethod,
     type ConfirmPendingRequestCandidate,
-    type EntityType,
 } from "../objects/er-diagram/diagram-handler";
 import { METHOD_UI_COLORS } from "../helpers/method-ui-colors";
 import { QueueManager, type QueueEntry } from "../helpers/queue-manager";
 import { QueuePanel } from "../objects/npc-queue/queue-panel";
 import { NPCDialogueModal } from "../objects/npc-queue/npc-dialogue-modal";
 import { PendingRequestsPanel } from "../objects/pending-requests-panel";
+
+const TIMEOUT_DRAIN_SECONDS = 90;
+const TIMEOUT_REWARD_PER_CORRECT = 0.06;
+const TIMEOUT_PENALTY_PER_INCORRECT = 0.08;
+const TIMEOUT_BAR_HEIGHT = 210;
+const TIMEOUT_BAR_WIDTH = 20;
+const TIMEOUT_BAR_X = 22;
+const TIMEOUT_BAR_Y = 54;
 
 export class MainGame extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -22,14 +29,12 @@ export class MainGame extends Scene {
     private dialogueModal?: NPCDialogueModal;
     private pendingRequestsPanel?: PendingRequestsPanel;
     private score = 0;
-    private unlockOrder: EntityType[] = [
-        "PET",
-        "HOUSE",
-        "JOB",
-        "VEHICLE",
-        "EMPLOYMENT",
-    ];
-    private unlockIndex = 0;
+    private completedRequestCount = 0;
+    private timeoutNormalized = 1;
+    private timeoutTrack?: Phaser.GameObjects.Rectangle;
+    private timeoutFill?: Phaser.GameObjects.Rectangle;
+    private timeoutPreviewOutline?: Phaser.GameObjects.Rectangle;
+    private gameOverTriggered = false;
     private readonly requestMethods: ApiRequestMethod[] = [
         "GET",
         "POST",
@@ -92,27 +97,7 @@ export class MainGame extends Scene {
             this.dialogueModal!.show(entry);
         });
 
-        // used for debugging until new tables are unlocked via difficulty increase
-        this.add
-            .text(24, 18, "Press SPACE to unlock next table", {
-                color: "#111",
-                fontSize: "18px",
-                backgroundColor: "#ffffff",
-                padding: { x: 8, y: 6 },
-            })
-            .setDepth(10);
-
-        this.input.keyboard?.on("keydown-UP", () => {
-            if (
-                !this.erDiagram ||
-                this.unlockIndex >= this.unlockOrder.length
-            ) {
-                return;
-            }
-            this.erDiagram.revealTable(this.unlockOrder[this.unlockIndex]);
-            this.unlockIndex += 1;
-        });
-
+        this.createTimeoutHud();
         this.createRequestHud();
         this.createFailureFlashOverlay();
 
@@ -125,7 +110,14 @@ export class MainGame extends Scene {
         console.log(`${this.score}`);
     }
 
-    update() {}
+    update(_time: number, delta: number) {
+        if (this.gameOverTriggered) {
+            return;
+        }
+        const elapsedSeconds = delta / 1000;
+        const drainedValue = elapsedSeconds / TIMEOUT_DRAIN_SECONDS;
+        this.setTimeoutNormalized(this.timeoutNormalized - drainedValue);
+    }
 
     changeScene() {
         this.scene.start("GameOver");
@@ -284,7 +276,7 @@ export class MainGame extends Scene {
     }
 
     private submitRequest() {
-        if (!this.erDiagram) {
+        if (this.gameOverTriggered || !this.erDiagram) {
             return;
         }
         if (!this.erDiagram.hasPendingChanges()) {
@@ -301,7 +293,7 @@ export class MainGame extends Scene {
         const result = this.erDiagram.confirmPendingRequests(candidates);
 
         if (result.unmatched.length > 0) {
-            this.flashFailureOverlay();
+            this.flashFailureOverlaySeries(result.unmatched.length);
             for (const unmatched of result.unmatched) {
                 console.warn(
                     `Pending request "${unmatched.summary}" did not match any active NPC request: ${unmatched.reason}`,
@@ -313,6 +305,9 @@ export class MainGame extends Scene {
             return;
         }
 
+        this.completedRequestCount += result.matched.length;
+        this.applyTimeoutRewardSeries(result.matched.length);
+
         const matchedNpcIds = Array.from(
             new Set(result.matched.map((match) => match.npcId)),
         );
@@ -321,6 +316,9 @@ export class MainGame extends Scene {
         );
         let remainingAnimations = matchedNpcIds.length;
         const onSuccessComplete = () => {
+            if (this.gameOverTriggered) {
+                return;
+            }
             remainingAnimations -= 1;
             if (remainingAnimations <= 0) {
                 this.queuePanel!.draw();
@@ -333,11 +331,19 @@ export class MainGame extends Scene {
                 onSuccessComplete();
                 continue;
             }
-            this.queuePanel!.flashNpcSuccess(npcId, () => {
-                this.queueManager!.completeNpcEntry(entry);
-                this.addScore(entry);
-                onSuccessComplete();
-            });
+            this.queuePanel!.flashNpcSuccess(
+                npcId,
+                this.successStatusCodeForMethod(entry.question.objective.method),
+                () => {
+                    if (this.gameOverTriggered) {
+                        onSuccessComplete();
+                        return;
+                    }
+                    this.queueManager!.completeNpcEntry(entry);
+                    this.addScore(entry);
+                    onSuccessComplete();
+                },
+            );
         }
     }
 
@@ -373,6 +379,59 @@ export class MainGame extends Scene {
             .setScrollFactor(0);
     }
 
+    private createTimeoutHud() {
+        this.add
+            .text(TIMEOUT_BAR_X, 24, "Timeout", {
+                color: "#111",
+                fontSize: "15px",
+                fontStyle: "bold",
+                backgroundColor: "#ffffff",
+                padding: { x: 6, y: 4 },
+            })
+            .setDepth(31);
+
+        this.timeoutTrack = this.add
+            .rectangle(
+                TIMEOUT_BAR_X,
+                TIMEOUT_BAR_Y,
+                TIMEOUT_BAR_WIDTH,
+                TIMEOUT_BAR_HEIGHT,
+                0x0f172a,
+                0.2,
+            )
+            .setOrigin(0, 0)
+            .setDepth(30);
+        this.timeoutTrack.setStrokeStyle(2, 0x0f172a, 0.9);
+
+        this.timeoutFill = this.add
+            .rectangle(
+                TIMEOUT_BAR_X,
+                TIMEOUT_BAR_Y,
+                TIMEOUT_BAR_WIDTH,
+                TIMEOUT_BAR_HEIGHT,
+                0x3bbf6b,
+                1,
+            )
+            .setOrigin(0, 0)
+            .setDepth(31);
+
+        this.timeoutPreviewOutline = this.add
+            .rectangle(
+                TIMEOUT_BAR_X - 2,
+                TIMEOUT_BAR_Y,
+                TIMEOUT_BAR_WIDTH + 4,
+                TIMEOUT_BAR_HEIGHT,
+                0xffffff,
+                0,
+            )
+            .setOrigin(0, 0)
+            .setDepth(32)
+            .setVisible(false);
+        this.timeoutPreviewOutline.setStrokeStyle(2, 0x2f6fff, 1);
+
+        this.syncTimeoutBarFill(this.timeoutNormalized);
+    }
+
     private flashFailureOverlay() {
         if (!this.failureFlashOverlay) {
             return;
@@ -388,6 +447,124 @@ export class MainGame extends Scene {
                 this.failureFlashOverlay?.setVisible(false);
             },
         });
+    }
+
+    private flashFailureOverlaySeries(count: number) {
+        for (let index = 0; index < count; index += 1) {
+            this.time.delayedCall(index * 260, () => {
+                if (this.gameOverTriggered) {
+                    return;
+                }
+                this.flashFailureOverlay();
+                this.applyTimeoutBurst(-TIMEOUT_PENALTY_PER_INCORRECT);
+            });
+        }
+    }
+
+    private applyTimeoutRewardSeries(count: number) {
+        for (let index = 0; index < count; index += 1) {
+            this.time.delayedCall(index * 110, () => {
+                if (this.gameOverTriggered) {
+                    return;
+                }
+                this.applyTimeoutBurst(TIMEOUT_REWARD_PER_CORRECT);
+            });
+        }
+    }
+
+    private setTimeoutNormalized(nextValue: number) {
+        if (this.gameOverTriggered) {
+            return;
+        }
+        const clamped = Phaser.Math.Clamp(nextValue, 0, 1);
+        if (clamped === this.timeoutNormalized) {
+            return;
+        }
+        this.timeoutNormalized = clamped;
+        this.syncTimeoutBarFill(clamped);
+        this.checkForTimeoutGameOver();
+    }
+
+    private applyTimeoutBurst(delta: number) {
+        if (this.gameOverTriggered) {
+            return;
+        }
+        const previous = this.timeoutNormalized;
+        const next = Phaser.Math.Clamp(previous + delta, 0, 1);
+        if (next === previous) {
+            return;
+        }
+        this.timeoutNormalized = next;
+        this.syncTimeoutBarFill(next);
+        this.playTimeoutPreview(previous, next);
+        this.checkForTimeoutGameOver();
+    }
+
+    private checkForTimeoutGameOver() {
+        if (this.gameOverTriggered || this.timeoutNormalized > 0) {
+            return;
+        }
+        this.gameOverTriggered = true;
+        this.scene.start("GameOver");
+    }
+
+    private syncTimeoutBarFill(value: number) {
+        if (!this.timeoutFill) {
+            return;
+        }
+        const geometry = this.timeoutGeometryFor(value);
+        if (geometry.height <= 0) {
+            this.timeoutFill.setVisible(false);
+            return;
+        }
+        this.timeoutFill.setVisible(true);
+        this.timeoutFill.setY(geometry.y);
+        this.timeoutFill.setDisplaySize(TIMEOUT_BAR_WIDTH, geometry.height);
+    }
+
+    private playTimeoutPreview(fromValue: number, toValue: number) {
+        if (!this.timeoutPreviewOutline) {
+            return;
+        }
+        const fromGeometry = this.timeoutGeometryFor(fromValue);
+        const toGeometry = this.timeoutGeometryFor(toValue);
+        const preview = this.timeoutPreviewOutline;
+        this.tweens.killTweensOf(preview);
+        preview
+            .setVisible(true)
+            .setAlpha(0.95)
+            .setY(fromGeometry.y)
+            .setDisplaySize(TIMEOUT_BAR_WIDTH + 4, Math.max(2, fromGeometry.height));
+        this.tweens.add({
+            targets: preview,
+            y: toGeometry.y,
+            displayHeight: Math.max(2, toGeometry.height),
+            alpha: 0,
+            duration: 190,
+            ease: "Quad.easeOut",
+            onComplete: () => {
+                preview.setVisible(false);
+            },
+        });
+    }
+
+    private timeoutGeometryFor(value: number): { y: number; height: number } {
+        const clamped = Phaser.Math.Clamp(value, 0, 1);
+        const fillHeight = TIMEOUT_BAR_HEIGHT * clamped;
+        return {
+            y: TIMEOUT_BAR_Y + (TIMEOUT_BAR_HEIGHT - fillHeight),
+            height: fillHeight,
+        };
+    }
+
+    private successStatusCodeForMethod(method: ApiRequestMethod): string {
+        if (method === "POST") {
+            return "201";
+        }
+        if (method === "DELETE") {
+            return "204";
+        }
+        return "200";
     }
 
     private bindMethodHotkeys() {
