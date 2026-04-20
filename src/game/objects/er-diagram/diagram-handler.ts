@@ -344,11 +344,13 @@ class EntityNodeView extends Phaser.GameObjects.Container {
         const body = scene.add.text(-84, -20, fields.join("\n"), {
             color: "#222",
             fontSize: "13px",
+            backgroundColor: "#f5f5f5",
         });
 
         this.add([this.bg, title, body]);
         scene.add.existing(this);
 
+        this.setDepth(10);
         this.setSize(200, 120);
         this.setInteractive({ useHandCursor: true });
         scene.input.setDraggable(this);
@@ -396,10 +398,12 @@ class RelationshipEdgeView {
         this.fromNode = fromNode;
         this.toNode = toNode;
         this.graphics = scene.add.graphics();
+        this.graphics.setDepth(2);
         this.label = scene.add.text(0, 0, rel.label, {
             color: "#444",
             fontSize: "12px",
         });
+        this.label.setDepth(3);
         this.redraw();
     }
 
@@ -473,11 +477,15 @@ export class ERDiagram {
     }
 
     getPendingRequests(): PendingRequestEntry[] {
-        return this.pendingRequests.map((entry) => this.clonePendingEntry(entry));
+        return this.pendingRequests.map((entry) =>
+            this.clonePendingEntry(entry),
+        );
     }
 
     undoPendingRequest(pendingId: string): boolean {
-        const idx = this.pendingRequests.findIndex((entry) => entry.id === pendingId);
+        const idx = this.pendingRequests.findIndex(
+            (entry) => entry.id === pendingId,
+        );
         if (idx < 0) {
             return false;
         }
@@ -507,7 +515,10 @@ export class ERDiagram {
                 if (matchedNpcIds.has(candidate.npcId)) {
                     continue;
                 }
-                const reason = this.getEntryMismatchReason(entry, candidate.objective);
+                const reason = this.getEntryMismatchReason(
+                    entry,
+                    candidate.objective,
+                );
                 if (!reason) {
                     resolvedCandidate = candidate;
                     break;
@@ -671,13 +682,15 @@ export class ERDiagram {
     }
 
     private refreshTableHighlightStyles() {
-        const stroke = this.selectedRequestMethod
-            ? METHOD_TABLE_STROKE[this.selectedRequestMethod]
-            : NO_METHOD_TABLE_STROKE;
+        const stroke =
+            this.selectedRequestMethod ?
+                METHOD_TABLE_STROKE[this.selectedRequestMethod]
+            :   NO_METHOD_TABLE_STROKE;
         for (const [type, node] of this.nodes.entries()) {
             const isSelected =
                 this.selectedType !== undefined && type === this.selectedType;
-            const isHovered = this.hoveredType !== undefined && type === this.hoveredType;
+            const isHovered =
+                this.hoveredType !== undefined && type === this.hoveredType;
             node.setVisualState(isSelected, isHovered, stroke);
         }
     }
@@ -688,11 +701,16 @@ export class ERDiagram {
         }
     }
 
-    private cloneRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+    private cloneRows(
+        rows: Record<string, unknown>[],
+    ): Record<string, unknown>[] {
         return rows.map((row) => ({ ...row }));
     }
 
-    private applyRowsToStore(entityType: EntityType, rows: Record<string, unknown>[]) {
+    private applyRowsToStore(
+        entityType: EntityType,
+        rows: Record<string, unknown>[],
+    ) {
         const tableMap = this.store.getTableForType(entityType);
         tableMap.clear();
         for (const row of rows) {
@@ -751,7 +769,9 @@ export class ERDiagram {
         this.onPendingChange?.();
     }
 
-    private getRowsForTableView(entityType: EntityType): Record<string, unknown>[] {
+    private getRowsForTableView(
+        entityType: EntityType,
+    ): Record<string, unknown>[] {
         let rows = this.getStoreRows(entityType);
         for (const entry of this.pendingRequests) {
             if (entry.method === "GET" || entry.entityType !== entityType) {
@@ -882,7 +902,10 @@ export class ERDiagram {
         };
     }
 
-    private buildGetSummary(entityType: EntityType, selectedTargets: string[]): string {
+    private buildGetSummary(
+        entityType: EntityType,
+        selectedTargets: string[],
+    ): string {
         if (selectedTargets.length === 1) {
             const label = this.formatGetSelectionToken(selectedTargets[0]);
             return `[GET] ${entityType}: ${label}`;
@@ -984,7 +1007,9 @@ export class ERDiagram {
         );
     }
 
-    private commitMutationEntry(entry: Exclude<PendingRequestEntry, { method: "GET" }>): void {
+    private commitMutationEntry(
+        entry: Exclude<PendingRequestEntry, { method: "GET" }>,
+    ): void {
         const currentRows = this.getStoreRows(entry.entityType);
         const nextRows = this.applyMutationOperationsToRows(
             currentRows,
@@ -1021,7 +1046,9 @@ export class ERDiagram {
                 return "POST must add exactly one new row matching the requested details.";
             }
             const newRow = inserted[0];
-            for (const [key, expected] of Object.entries(request.expectedInsertFields)) {
+            for (const [key, expected] of Object.entries(
+                request.expectedInsertFields,
+            )) {
                 const actual = newRow[key];
                 if (!this.valuesMatchInsertExpectation(actual, expected)) {
                     return `New row must have ${key} = ${String(expected)} (got ${String(actual)}).`;
@@ -1050,7 +1077,10 @@ export class ERDiagram {
 
         if (request.method === "PUT") {
             if (request.targetField) {
-                if (beforeRow[request.targetField] === afterRow[request.targetField]) {
+                if (
+                    beforeRow[request.targetField] ===
+                    afterRow[request.targetField]
+                ) {
                     return `PUT must modify ${request.targetField} on row id ${request.targetRowId}.`;
                 }
                 return undefined;
@@ -1080,7 +1110,10 @@ export class ERDiagram {
         return undefined;
     }
 
-    private valuesMatchInsertExpectation(actual: unknown, expected: unknown): boolean {
+    private valuesMatchInsertExpectation(
+        actual: unknown,
+        expected: unknown,
+    ): boolean {
         if (actual === expected) {
             return true;
         }
@@ -1111,7 +1144,7 @@ export function buildDefaultStore(): ERStore {
         feeling: "focused",
         money: 900,
     });
-    store.users.set("u3",{
+    store.users.set("u3", {
         id: "u3",
         name: "Carol",
         age: 28,
