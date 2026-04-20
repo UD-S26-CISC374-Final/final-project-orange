@@ -1,21 +1,27 @@
 import type { ApiRequestMethod, EntityType } from "./diagram-handler";
 import { METHOD_MODAL_SURFACE, METHOD_UI_COLORS } from "../../helpers/method-ui-colors";
 
-type RowData = Record<string, unknown>;
+export type RowData = Record<string, unknown>;
 
 type MutationKind = "none" | "insert" | "update" | "delete";
 
+export type TableViewSavePayload =
+    | {
+          method: "GET";
+          entityType: EntityType;
+          selectedTargets: string[];
+      }
+    | {
+          method: "POST" | "PUT" | "DELETE";
+          entityType: EntityType;
+          mutation: MutationKind;
+          beforeRows: RowData[];
+          afterRows: RowData[];
+      };
+
 interface TableViewModalHooks {
     onFieldEdited?: () => void;
-    onEditsConfirmed?: (payload: {
-        entityType: EntityType;
-        mutation: MutationKind;
-        rows: RowData[];
-    }) => void;
-    onGetSelectionChanged?: (payload: {
-        entityType: EntityType;
-        selectedTargets: string[];
-    }) => void;
+    onRequestSaved?: (payload: TableViewSavePayload) => void;
 }
 
 interface TableViewShowOptions {
@@ -33,7 +39,7 @@ export class TableViewModal {
     private readonly hintText: Phaser.GameObjects.Text;
     private readonly closeButton: Phaser.GameObjects.Text;
     private readonly editButton: Phaser.GameObjects.Text;
-    private readonly confirmButton: Phaser.GameObjects.Text;
+    private readonly saveButton: Phaser.GameObjects.Text;
     private readonly addRowButton: Phaser.GameObjects.Text;
     private readonly deleteRowButton: Phaser.GameObjects.Text;
     private readonly previousPageButton: Phaser.GameObjects.Text;
@@ -57,6 +63,8 @@ export class TableViewModal {
     /** Keys `${rowIndex}:${column}` for field-level soft-delete (null non-id values). */
     private selectedDeleteFields = new Set<string>();
     private baseRowCount = 0;
+    /** POST: row indices >= baseRowCount that are included in Save (default on for new rows). */
+    private selectedPostNewRows = new Set<number>();
     private selectedGetTargets = new Set<string>();
     private rowEditorVisible = false;
     private rowEditorRowIndex?: number;
@@ -133,9 +141,9 @@ export class TableViewModal {
         });
 
         this.closeButton = scene.add
-            .text(340, -160, "X", {
+            .text(358, -158, "X", {
                 color: "#b00020",
-                fontSize: "24px",
+                fontSize: "22px",
                 fontStyle: "bold",
                 backgroundColor: "#ffffff",
             })
@@ -144,26 +152,27 @@ export class TableViewModal {
         this.closeButton.on("pointerup", () => this.hide());
 
         this.editButton = scene.add
-            .text(295, -160, "✎", {
-                color: "#1a5fb4",
-                fontSize: "24px",
-                fontStyle: "bold",
-                backgroundColor: "#ffffff",
-            })
-            .setInteractive({ useHandCursor: true });
-        this.editButton.on("pointerdown", () => this.toggleEditMode());
-
-        this.confirmButton = scene.add
-            .text(196, -160, "Confirm", {
+            .text(116, -160, "Make Edits", {
                 color: "#ffffff",
                 fontSize: "16px",
+                fontStyle: "bold",
+                backgroundColor: "#1a5fb4",
+                padding: { left: 10, right: 10, top: 4, bottom: 4 },
+            })
+            .setInteractive({ useHandCursor: true });
+        this.editButton.on("pointerdown", () => this.onPrimaryActionPressed());
+
+        this.saveButton = scene.add
+            .text(292, -158, "Save", {
+                color: "#ffffff",
+                fontSize: "14px",
                 fontStyle: "bold",
                 backgroundColor: "#0b8f08",
                 padding: { left: 8, right: 8, top: 4, bottom: 4 },
             })
             .setInteractive({ useHandCursor: true });
-        this.confirmButton.on("pointerdown", () => this.confirmEdits());
-        this.confirmButton.setVisible(false);
+        this.saveButton.on("pointerdown", () => this.onSavePressed());
+        this.saveButton.setVisible(false);
 
         this.addRowButton = scene.add
             .text(120, -160, "+ Row", {
@@ -241,13 +250,13 @@ export class TableViewModal {
             this.tableText,
             this.editorContainer,
             this.hintText,
-            this.confirmButton,
             this.addRowButton,
             this.deleteRowButton,
             this.previousPageButton,
             this.nextPageButton,
             this.pageText,
             this.editButton,
+            this.saveButton,
             this.closeButton,
         ]);
         this.container.setDepth(1000);
@@ -324,6 +333,7 @@ export class TableViewModal {
         this.selectedDeleteRows.clear();
         this.selectedDeleteFields.clear();
         this.baseRowCount = rows.length;
+        this.selectedPostNewRows.clear();
         this.selectedGetTargets.clear();
         this.rowEditorVisible = false;
         this.rowEditorRowIndex = undefined;
@@ -347,6 +357,7 @@ export class TableViewModal {
         this.selectedDeleteRows.clear();
         this.selectedDeleteFields.clear();
         this.baseRowCount = 0;
+        this.selectedPostNewRows.clear();
         this.selectedGetTargets.clear();
         this.closeRowEditor();
         this.canEditCurrentTable = true;
@@ -415,14 +426,24 @@ export class TableViewModal {
     private renderTable() {
         const pal = this.getModalPalette();
         const isGetMode = this.currentMode === "GET";
+        const isPostMode = this.currentMode === "POST";
         this.tableText.setVisible(!this.isEditMode && !isGetMode);
         this.editorContainer.setVisible(this.isEditMode || isGetMode);
-        this.confirmButton.setVisible(this.isEditMode && !isGetMode);
+        this.saveButton.setVisible(
+            this.canEditCurrentTable &&
+                (isGetMode || (this.isEditMode && !isGetMode)),
+        );
         this.addRowButton.setVisible(this.isEditMode && this.currentMode === "POST");
         this.deleteRowButton.setVisible(
             this.isEditMode && this.currentMode === "DELETE",
         );
-        this.editButton.setColor(this.isEditMode ? "#0b8f08" : pal.accentText);
+        this.editButton.setText(
+            isPostMode ? "Add New" : this.isEditMode ? "Editing..." : "Make Edits",
+        );
+        this.editButton.setColor("#ffffff");
+        this.editButton.setBackgroundColor(
+            this.isEditMode && !isPostMode ? "#0b8f08" : pal.selectedStrong,
+        );
         if (this.isEditMode && this.currentMode === "POST") {
             this.addRowButton.setBackgroundColor(METHOD_UI_COLORS.POST.background);
         }
@@ -443,18 +464,66 @@ export class TableViewModal {
         this.hintText.setText(
             this.isEditMode
                 ? this.currentMode === "POST"
-                    ? "POST mode: use + Row to open the add-item modal, then Confirm."
+                    ? "POST mode: add rows with + Row; check [x] each new row for this request, then Save (top right)."
                     : this.currentMode === "PUT"
-                      ? "PUT mode: click a row to open the edit modal with prefilled values, then Confirm."
+                      ? "PUT mode: click a row to open the edit modal with prefilled values, then Save (top right)."
                       : this.currentMode === "DELETE"
-                        ? `DELETE mode: click a row to clear all non-id fields, or click values to clear specific fields (${this.selectedDeleteRows.size} rows, ${this.selectedDeleteFields.size} fields), then Confirm.`
+                        ? `DELETE mode: click a row to clear all non-id fields, or click values to clear specific fields (${this.selectedDeleteRows.size} rows, ${this.selectedDeleteFields.size} fields), then Save (top right).`
                         : "Edit mode on."
                 : isGetMode
-                  ? `GET mode: click row or field values to stage returned data (${this.selectedGetTargets.size} selected).`
+                  ? `GET mode: click row or field values to stage returned data (${this.selectedGetTargets.size} selected), then Save (top right).`
+                  : this.currentMode === "POST"
+                    ? "POST mode: click Add New to open the create modal, then Save (top right) to stage selected new rows."
                   : this.canEditCurrentTable
-                  ? "Click ✎ to edit values directly in the modal. ID fields are read-only."
+                  ? "Click Make Edits to edit values directly in the modal. ID fields are read-only."
                   : "Select a request type first, then reopen this table to edit data.",
         );
+    }
+
+    private onPrimaryActionPressed() {
+        if (!this.currentEntityType || !this.canEditCurrentTable || this.currentMode === "GET") {
+            return;
+        }
+        if (this.currentMode === "POST") {
+            if (!this.isEditMode) {
+                this.isEditMode = true;
+                this.currentPageIndex = 0;
+                this.selectedDeleteRows.clear();
+                this.selectedDeleteFields.clear();
+                this.editorScrollOffset = 0;
+                this.renderTable();
+            }
+            this.openRowEditor();
+            return;
+        }
+        this.toggleEditMode();
+    }
+
+    private onSavePressed(): void {
+        if (this.currentMode === "GET") {
+            this.saveGetSelections();
+            this.hide();
+            return;
+        }
+        if (this.isEditMode) {
+            this.confirmEdits();
+            this.hide();
+        }
+    }
+
+    private saveGetSelections(): void {
+        if (!this.currentEntityType || this.currentMode !== "GET") {
+            return;
+        }
+        const selectedTargets = Array.from(this.selectedGetTargets);
+        if (selectedTargets.length === 0) {
+            return;
+        }
+        this.hooks?.onRequestSaved?.({
+            method: "GET",
+            entityType: this.currentEntityType,
+            selectedTargets,
+        });
     }
 
     private toggleEditMode() {
@@ -474,6 +543,7 @@ export class TableViewModal {
         if (!this.isEditMode) {
             this.stagedRows = this.currentRows.map((row) => ({ ...row }));
             this.editorScrollOffset = 0;
+            this.selectedPostNewRows.clear();
         }
         this.currentPageIndex = 0;
         this.renderTable();
@@ -495,15 +565,54 @@ export class TableViewModal {
             );
             forcedMutation = "delete";
         }
+        if (this.currentMode === "POST") {
+            const basePart = this.stagedRows
+                .slice(0, this.baseRowCount)
+                .map((row) => ({ ...row }));
+            const checkedNew = this.stagedRows
+                .filter(
+                    (_, i) =>
+                        i >= this.baseRowCount && this.selectedPostNewRows.has(i),
+                )
+                .map((row) => ({ ...row }));
+            const uncheckedDraft = this.stagedRows
+                .filter(
+                    (_, i) =>
+                        i >= this.baseRowCount && !this.selectedPostNewRows.has(i),
+                )
+                .map((row) => ({ ...row }));
+            if (
+                basePart.length === 0 &&
+                checkedNew.length === 0 &&
+                uncheckedDraft.length > 0
+            ) {
+                return;
+            }
+            nextRows = [...basePart, ...checkedNew];
+            this.baseRowCount = nextRows.length;
+            this.stagedRows = [...nextRows, ...uncheckedDraft].map((row) => ({
+                ...row,
+            }));
+            this.selectedPostNewRows.clear();
+        }
         const afterRows = nextRows.map((row) => ({ ...row }));
         this.currentRows = nextRows.map((row) => ({ ...row }));
-        this.stagedRows = nextRows.map((row) => ({ ...row }));
+        if (this.currentMode !== "POST") {
+            this.stagedRows = nextRows.map((row) => ({ ...row }));
+        }
         const mutation = forcedMutation ?? this.detectMutation(beforeRows, afterRows);
-        if (this.currentEntityType) {
-            this.hooks?.onEditsConfirmed?.({
+        if (
+            this.currentEntityType &&
+            this.currentMode &&
+            this.currentMode !== "GET" &&
+            mutation !== "none"
+        ) {
+            this.hooks?.onRequestSaved?.({
+                method: this.currentMode,
                 entityType: this.currentEntityType,
                 mutation,
-                rows: this.currentRows.map((row) => ({ ...row })),
+                beforeRows,
+                afterRows,
             });
         }
         this.isEditMode = false;
@@ -543,6 +652,10 @@ export class TableViewModal {
             const rowIndex = pageStart + localIndex;
             const rowMarkedForDelete = this.selectedDeleteRows.has(rowIndex);
             const rowHasFieldDeleteMarks = this.rowHasAnyFieldDeleteMark(rowIndex, columns);
+            const isPostNewRow =
+                this.currentMode === "POST" && rowIndex >= this.baseRowCount;
+            const postNewChecked =
+                isPostNewRow && this.selectedPostNewRows.has(rowIndex);
             const rowPrefix =
                 this.currentMode === "DELETE"
                     ? rowMarkedForDelete
@@ -550,18 +663,50 @@ export class TableViewModal {
                         : rowHasFieldDeleteMarks
                           ? "[~] "
                           : "[ ] "
-                    : "";
+                    : isPostNewRow
+                      ? postNewChecked
+                          ? "[x] "
+                          : "[ ] "
+                      : "";
             const rowLabel = this.scene.add.text(-350, y, `${rowPrefix}Row ${rowIndex + 1}`, {
-                color: rowMarkedForDelete ? "#ffffff" : "#111",
+                color:
+                    rowMarkedForDelete
+                        ? "#ffffff"
+                        : isPostNewRow && postNewChecked
+                          ? "#ffffff"
+                          : "#111",
                 fontSize: "13px",
                 fontStyle: "bold",
                 backgroundColor: rowMarkedForDelete
                     ? "#b00020"
                     : rowHasFieldDeleteMarks
                       ? "#fff3e0"
-                      : "#ffffff",
+                      : isPostNewRow
+                        ? postNewChecked
+                            ? pal.selectedStrong
+                            : pal.surface
+                        : "#ffffff",
                 padding: { left: 4, right: 4, top: 2, bottom: 2 },
             });
+            if (isPostNewRow) {
+                rowLabel
+                    .setInteractive({ useHandCursor: true })
+                    .on("pointerover", () => {
+                        if (!this.selectedPostNewRows.has(rowIndex)) {
+                            rowLabel.setBackgroundColor(pal.surfaceHover);
+                        }
+                    })
+                    .on("pointerout", () => {
+                        rowLabel.setBackgroundColor(
+                            this.selectedPostNewRows.has(rowIndex)
+                                ? pal.selectedStrong
+                                : pal.surface,
+                        );
+                    })
+                    .on("pointerdown", () => {
+                        this.togglePostNewRowInclusion(rowIndex);
+                    });
+            }
             if (this.currentMode === "PUT" && rowIndex < this.baseRowCount) {
                 rowLabel
                     .setInteractive({ useHandCursor: true })
@@ -816,6 +961,19 @@ export class TableViewModal {
         }
     }
 
+    private togglePostNewRowInclusion(rowIndex: number) {
+        if (this.currentMode !== "POST" || rowIndex < this.baseRowCount) {
+            return;
+        }
+        if (this.selectedPostNewRows.has(rowIndex)) {
+            this.selectedPostNewRows.delete(rowIndex);
+        } else {
+            this.selectedPostNewRows.add(rowIndex);
+        }
+        this.hooks?.onFieldEdited?.();
+        this.renderEditorFields();
+    }
+
     private toggleGetTarget(target: string) {
         if (this.currentMode !== "GET") {
             return;
@@ -824,12 +982,6 @@ export class TableViewModal {
             this.selectedGetTargets.delete(target);
         } else {
             this.selectedGetTargets.add(target);
-        }
-        if (this.currentEntityType) {
-            this.hooks?.onGetSelectionChanged?.({
-                entityType: this.currentEntityType,
-                selectedTargets: Array.from(this.selectedGetTargets),
-            });
         }
         this.renderGetSelectionRows();
     }
@@ -1116,6 +1268,7 @@ export class TableViewModal {
         const committedRow = { ...this.rowEditorDraft };
         if (this.currentMode === "POST") {
             this.stagedRows.push(committedRow);
+            this.selectedPostNewRows.add(this.stagedRows.length - 1);
             this.currentPageIndex = this.getTotalPages(this.stagedRows) - 1;
         } else if (this.currentMode === "PUT") {
             if (
@@ -1207,5 +1360,35 @@ export class TableViewModal {
             }
         }
         return nextRow;
+    }
+
+    /** Sync modal rows after pending workspace undo/redo (same table open). */
+    applyExternalRowsIfVisible(
+        entityType: EntityType,
+        rows: RowData[],
+    ): void {
+        if (!this.container.visible || this.currentEntityType !== entityType) {
+            return;
+        }
+        this.currentRows = rows.map((row) => ({ ...row }));
+        this.stagedRows = rows.map((row) => ({ ...row }));
+        this.clampCurrentPage(this.stagedRows);
+        this.renderTable();
+    }
+
+    /** Sync GET checkmarks when the action trace is updated from the Pending requests panel. */
+    syncGetSelectionsFromTrace(entityType: EntityType, tokens: string[]): void {
+        if (
+            !this.container.visible ||
+            this.currentEntityType !== entityType ||
+            this.currentMode !== "GET"
+        ) {
+            return;
+        }
+        this.selectedGetTargets.clear();
+        for (const t of tokens) {
+            this.selectedGetTargets.add(t);
+        }
+        this.renderGetSelectionRows();
     }
 }

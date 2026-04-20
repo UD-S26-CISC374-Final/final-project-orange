@@ -3,7 +3,11 @@ import {
     METHOD_TABLE_STROKE,
     NO_METHOD_TABLE_STROKE,
 } from "../../helpers/method-ui-colors";
-import { TableViewModal } from "./table-view-modal";
+import {
+    TableViewModal,
+    type RowData as TableRowData,
+    type TableViewSavePayload,
+} from "./table-view-modal";
 
 export type EntityType =
     | "USER"
@@ -82,6 +86,12 @@ export interface RequestValidationResult {
     ok: boolean;
     errorCode: string;
     message: string;
+    appliedEntities?: EntityType[];
+    failedEntities?: Array<{
+        entityType: EntityType;
+        errorCode: string;
+        message: string;
+    }>;
 }
 
 export const REQUEST_ERROR_CODES = {
@@ -93,6 +103,58 @@ export const REQUEST_ERROR_CODES = {
     WRONG_MUTATION_KIND: "REQ_005",
     RELATIONAL_RULE_FAILED: "REQ_006",
 } as const;
+
+export type PendingMutationOperation =
+    | {
+          kind: "insert";
+          rowId: string;
+          row: Record<string, unknown>;
+      }
+    | {
+          kind: "delete";
+          rowId: string;
+      }
+    | {
+          kind: "update";
+          rowId: string;
+          changes: Record<string, unknown>;
+      };
+
+export type PendingRequestEntry =
+    | {
+          id: string;
+          method: "GET";
+          entityType: EntityType;
+          summary: string;
+          selectedTargets: string[];
+      }
+    | {
+          id: string;
+          method: "POST" | "PUT" | "DELETE";
+          entityType: EntityType;
+          summary: string;
+          beforeRows: Record<string, unknown>[];
+          afterRows: Record<string, unknown>[];
+          operations: PendingMutationOperation[];
+      };
+
+export interface ConfirmPendingRequestCandidate {
+    npcId: string;
+    objective: ApiRequestObjective;
+}
+
+export interface ConfirmPendingRequestsResult {
+    matched: Array<{
+        pendingId: string;
+        npcId: string;
+        summary: string;
+    }>;
+    unmatched: Array<{
+        pendingId: string;
+        summary: string;
+        reason: string;
+    }>;
+}
 
 export const RELATIONSHIPS: RelationshipDef[] = [
     {
@@ -301,13 +363,17 @@ class EntityNodeView extends Phaser.GameObjects.Container {
         });
     }
 
-    setSelected(isSelected: boolean, highlightColor?: number) {
-        if (!isSelected) {
+    setVisualState(
+        isSelected: boolean,
+        isHovered: boolean,
+        highlightColor?: number,
+    ) {
+        if (!isSelected && !isHovered) {
             this.bg.setStrokeStyle(3, 0x000000, 1);
             return;
         }
         const stroke = highlightColor ?? NO_METHOD_TABLE_STROKE;
-        this.bg.setStrokeStyle(4, stroke, 1);
+        this.bg.setStrokeStyle(isSelected ? 4 : 3, stroke, 1);
     }
 
     markDragged() {
@@ -366,6 +432,8 @@ export interface ERDiagramOptions {
     y?: number;
     initiallyHiddenTables?: EntityType[];
     store?: ERStore;
+    /** Called when pending table edits change (for the Changes panel). */
+    onPendingChange?: () => void;
 }
 
 export class ERDiagram {
@@ -375,21 +443,15 @@ export class ERDiagram {
     private edges: RelationshipEdgeView[] = [];
     private hiddenTables = new Set<EntityType>();
     private selectedType?: EntityType;
+    private hoveredType?: EntityType;
     private xOffset: number;
     private yOffset: number;
     private tableViewModal: TableViewModal;
     private selectedRequestMethod?: ApiRequestMethod;
     private currentRequest?: ApiRequestObjective;
-    private actionTrace = {
-        openedTables: new Set<EntityType>(),
-        editCount: 0,
-        getSelections: new Map<EntityType, string[]>(),
-        confirmations: [] as Array<{
-            entityType: EntityType;
-            mutation: "none" | "insert" | "update" | "delete";
-            rows: Record<string, unknown>[];
-        }>,
-    };
+    private pendingRequests: PendingRequestEntry[] = [];
+    private nextPendingId = 1;
+    private onPendingChange?: () => void;
 
     constructor(scene: Phaser.Scene, options?: ERDiagramOptions) {
         this.scene = scene;
@@ -401,19 +463,87 @@ export class ERDiagram {
             this.hiddenTables.add(tableType);
         }
 
+        this.onPendingChange = options?.onPendingChange;
+
         this.createViews();
         this.wireInteractions();
         this.tableViewModal = new TableViewModal(scene, {
-            onFieldEdited: () => {
-                this.actionTrace.editCount += 1;
-            },
-            onGetSelectionChanged: ({ entityType, selectedTargets }) => {
-                this.actionTrace.getSelections.set(entityType, selectedTargets);
-            },
-            onEditsConfirmed: ({ entityType, mutation, rows }) => {
-                this.actionTrace.confirmations.push({ entityType, mutation, rows });
-            },
+            onRequestSaved: (payload) => this.savePendingRequest(payload),
         });
+    }
+
+    getPendingRequests(): PendingRequestEntry[] {
+        return this.pendingRequests.map((entry) => this.clonePendingEntry(entry));
+    }
+
+    undoPendingRequest(pendingId: string): boolean {
+        const idx = this.pendingRequests.findIndex((entry) => entry.id === pendingId);
+        if (idx < 0) {
+            return false;
+        }
+        const [removed] = this.pendingRequests.splice(idx, 1);
+        this.syncVisibleEntityRows(new Set([removed.entityType]));
+        this.onPendingChange?.();
+        return true;
+    }
+
+    hasPendingChanges(): boolean {
+        return this.pendingRequests.length > 0;
+    }
+
+    confirmPendingRequests(
+        candidates: ConfirmPendingRequestCandidate[],
+    ): ConfirmPendingRequestsResult {
+        const matched: ConfirmPendingRequestsResult["matched"] = [];
+        const unmatched: ConfirmPendingRequestsResult["unmatched"] = [];
+        const matchedNpcIds = new Set<string>();
+        const touchedEntities = new Set<EntityType>();
+
+        for (const entry of this.pendingRequests) {
+            let resolvedCandidate: ConfirmPendingRequestCandidate | undefined;
+            let specificReason = "did not match any active NPC request";
+
+            for (const candidate of candidates) {
+                if (matchedNpcIds.has(candidate.npcId)) {
+                    continue;
+                }
+                const reason = this.getEntryMismatchReason(entry, candidate.objective);
+                if (!reason) {
+                    resolvedCandidate = candidate;
+                    break;
+                }
+                if (this.isComparableObjective(entry, candidate.objective)) {
+                    specificReason = reason;
+                }
+            }
+
+            if (!resolvedCandidate) {
+                unmatched.push({
+                    pendingId: entry.id,
+                    summary: entry.summary,
+                    reason: specificReason,
+                });
+                touchedEntities.add(entry.entityType);
+                continue;
+            }
+
+            matchedNpcIds.add(resolvedCandidate.npcId);
+            if (entry.method !== "GET") {
+                this.commitMutationEntry(entry);
+            }
+            matched.push({
+                pendingId: entry.id,
+                npcId: resolvedCandidate.npcId,
+                summary: entry.summary,
+            });
+            touchedEntities.add(entry.entityType);
+        }
+
+        this.pendingRequests = [];
+        this.syncVisibleEntityRows(touchedEntities);
+        this.onPendingChange?.();
+
+        return { matched, unmatched };
     }
 
     setSelectedRequestMethod(method: ApiRequestMethod) {
@@ -434,7 +564,6 @@ export class ERDiagram {
 
     startRequest(request: ApiRequestObjective) {
         this.currentRequest = request;
-        this.resetActionTrace();
     }
 
     getCurrentRequest(): ApiRequestObjective | undefined {
@@ -443,168 +572,14 @@ export class ERDiagram {
 
     clearCurrentRequest() {
         this.currentRequest = undefined;
-        this.resetActionTrace();
     }
 
     submitCurrentRequest(): RequestValidationResult {
-        if (!this.currentRequest) {
-            return {
-                ok: false,
-                errorCode: REQUEST_ERROR_CODES.NO_ACTIVE_REQUEST,
-                message: "No active request to submit.",
-            };
-        }
-        if (!this.selectedRequestMethod) {
-            return {
-                ok: false,
-                errorCode: REQUEST_ERROR_CODES.METHOD_NOT_SELECTED,
-                message: "Select a request type before performing actions.",
-            };
-        }
-        if (this.selectedRequestMethod !== this.currentRequest.method) {
-            return {
-                ok: false,
-                errorCode: REQUEST_ERROR_CODES.METHOD_MISMATCH,
-                message: `Selected ${this.selectedRequestMethod} but request requires ${this.currentRequest.method}.`,
-            };
-        }
-
-        const targetType = this.currentRequest.targetType;
-        const openedTarget = this.actionTrace.openedTables.has(targetType);
-        let targetConfirmation:
-            | {
-                  entityType: EntityType;
-                  mutation: "none" | "insert" | "update" | "delete";
-                  rows: Record<string, unknown>[];
-              }
-            | undefined;
-        for (let index = this.actionTrace.confirmations.length - 1; index >= 0; index -= 1) {
-            const entry = this.actionTrace.confirmations[index];
-            if (entry.entityType === targetType) {
-                targetConfirmation = entry;
-                break;
-            }
-        }
-
-        switch (this.currentRequest.method) {
-            case "GET":
-                if (!openedTarget) {
-                    return {
-                        ok: false,
-                        errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
-                        message: "Open the target table before submitting GET.",
-                    };
-                }
-                const selectionCount =
-                    this.actionTrace.getSelections.get(targetType) ?? [];
-                if (selectionCount.length === 0) {
-                    return {
-                        ok: false,
-                        errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
-                        message:
-                            "GET request must select at least one row or field in the target table.",
-                    };
-                }
-                if (targetConfirmation && targetConfirmation.mutation !== "none") {
-                    return {
-                        ok: false,
-                        errorCode: REQUEST_ERROR_CODES.WRONG_MUTATION_KIND,
-                        message: "GET request must not confirm table mutations.",
-                    };
-                }
-                if (this.currentRequest.targetRowId || this.currentRequest.targetField) {
-                    const requiredRow = this.currentRequest.targetRowId;
-                    const requiredField = this.currentRequest.targetField;
-                    const selectedTargets = this.actionTrace.getSelections.get(targetType) ?? [];
-                    if (requiredRow && requiredField) {
-                        const requiredToken = `field:${requiredRow}:${requiredField}`;
-                        if (!selectedTargets.includes(requiredToken)) {
-                            return {
-                                ok: false,
-                                errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
-                                message: `GET must include field ${requiredField} on row id ${requiredRow}.`,
-                            };
-                        }
-                    } else if (requiredRow) {
-                        const rowToken = `row:${requiredRow}`;
-                        const hasRowSelection = selectedTargets.some(
-                            (token) =>
-                                token === rowToken || token.startsWith(`field:${requiredRow}:`),
-                        );
-                        if (!hasRowSelection) {
-                            return {
-                                ok: false,
-                                errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
-                                message: `GET must include selection for row id ${requiredRow}.`,
-                            };
-                        }
-                    }
-                }
-                break;
-            case "POST":
-            case "PUT":
-            case "DELETE": {
-                if (!targetConfirmation) {
-                    return {
-                        ok: false,
-                        errorCode: REQUEST_ERROR_CODES.WRONG_TARGET_TABLE,
-                        message: "Confirm changes on the target table before submitting.",
-                    };
-                }
-                const expectedMutation =
-                    this.currentRequest.method === "POST"
-                        ? "insert"
-                        : this.currentRequest.method === "PUT"
-                          ? "update"
-                          : "delete";
-                if (targetConfirmation.mutation !== expectedMutation) {
-                    return {
-                        ok: false,
-                        errorCode: REQUEST_ERROR_CODES.WRONG_MUTATION_KIND,
-                        message: `Expected ${expectedMutation} action on ${targetType}.`,
-                    };
-                }
-                const originalRows = Array.from(
-                    this.store.getTableForType(targetType).values(),
-                ).map((row) => row as Record<string, unknown>);
-                const specificError = this.validateSpecificMutationRequest(
-                    this.currentRequest,
-                    originalRows,
-                    targetConfirmation.rows,
-                );
-                if (specificError) {
-                    return {
-                        ok: false,
-                        errorCode: REQUEST_ERROR_CODES.NO_ACTION_TRACE,
-                        message: specificError,
-                    };
-                }
-                const relationalErrors = this.validateRulesWithStagedRows(
-                    targetType,
-                    targetConfirmation.rows,
-                );
-                if (relationalErrors.length > 0) {
-                    return {
-                        ok: false,
-                        errorCode: REQUEST_ERROR_CODES.RELATIONAL_RULE_FAILED,
-                        message: relationalErrors[0],
-                    };
-                }
-                break;
-            }
-        }
-        if (
-            this.currentRequest.method === "POST" ||
-            this.currentRequest.method === "PUT" ||
-            this.currentRequest.method === "DELETE"
-        ) {
-            this.applyRowsToStore(targetType, targetConfirmation?.rows ?? []);
-        }
-
         return {
-            ok: true,
-            errorCode: "REQ_OK",
-            message: `Request ${this.currentRequest.method} on ${targetType} completed.`,
+            ok: false,
+            errorCode: REQUEST_ERROR_CODES.NO_ACTIVE_REQUEST,
+            message:
+                "Legacy single-request submission is disabled. Use confirmPendingRequests().",
         };
     }
 
@@ -634,6 +609,16 @@ export class ERDiagram {
                 layout.fields,
                 (entityType) => this.selectNode(entityType),
             );
+            node.on("pointerover", () => {
+                this.hoveredType = layout.type;
+                this.refreshTableHighlightStyles();
+            });
+            node.on("pointerout", () => {
+                if (this.hoveredType === layout.type) {
+                    this.hoveredType = undefined;
+                }
+                this.refreshTableHighlightStyles();
+            });
             node.setVisible(!this.hiddenTables.has(layout.type));
             this.nodes.set(layout.type, node);
         }
@@ -676,21 +661,12 @@ export class ERDiagram {
         if (!this.selectedRequestMethod) {
             return;
         }
-        if (this.selectedType === entityType) {
-            this.actionTrace.openedTables.add(entityType);
-            const tableMap = this.store.getTableForType(entityType);
-            const rows = Array.from(tableMap.values()).map(
-                (value) => value as Record<string, unknown>,
-            );
-            this.tableViewModal.show(entityType, rows, {
-                allowEditing: Boolean(this.selectedRequestMethod),
-                mode: this.selectedRequestMethod,
-            });
-            return;
-        }
-
         this.selectedType = entityType;
-        this.tableViewModal.hide();
+        const rows = this.getRowsForTableView(entityType);
+        this.tableViewModal.show(entityType, rows, {
+            allowEditing: Boolean(this.selectedRequestMethod),
+            mode: this.selectedRequestMethod,
+        });
         this.refreshTableHighlightStyles();
     }
 
@@ -701,11 +677,8 @@ export class ERDiagram {
         for (const [type, node] of this.nodes.entries()) {
             const isSelected =
                 this.selectedType !== undefined && type === this.selectedType;
-            if (isSelected) {
-                node.setSelected(true, stroke);
-            } else {
-                node.setSelected(false);
-            }
+            const isHovered = this.hoveredType !== undefined && type === this.hoveredType;
+            node.setVisualState(isSelected, isHovered, stroke);
         }
     }
 
@@ -715,11 +688,8 @@ export class ERDiagram {
         }
     }
 
-    private resetActionTrace() {
-        this.actionTrace.openedTables.clear();
-        this.actionTrace.editCount = 0;
-        this.actionTrace.getSelections.clear();
-        this.actionTrace.confirmations = [];
+    private cloneRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+        return rows.map((row) => ({ ...row }));
     }
 
     private applyRowsToStore(entityType: EntityType, rows: Record<string, unknown>[]) {
@@ -734,18 +704,302 @@ export class ERDiagram {
         }
     }
 
-    private validateRulesWithStagedRows(
-        entityType: EntityType,
-        stagedRows: Record<string, unknown>[],
-    ): string[] {
-        const tableMap = this.store.getTableForType(entityType);
-        const originalRows = Array.from(tableMap.values()).map(
-            (row) => row as Record<string, unknown>,
+    private savePendingRequest(payload: TableViewSavePayload): void {
+        if (payload.method === "GET") {
+            if (payload.selectedTargets.length === 0) {
+                return;
+            }
+            this.pendingRequests.push({
+                id: `pending-${this.nextPendingId++}`,
+                method: "GET",
+                entityType: payload.entityType,
+                selectedTargets: [...payload.selectedTargets],
+                summary: this.buildGetSummary(
+                    payload.entityType,
+                    payload.selectedTargets,
+                ),
+            });
+            this.onPendingChange?.();
+            return;
+        }
+
+        if (payload.mutation === "none") {
+            return;
+        }
+        const operations = this.computeMutationOperations(
+            payload.beforeRows,
+            payload.afterRows,
         );
-        this.applyRowsToStore(entityType, stagedRows);
-        const errors = this.store.validateBasicRelationalRules();
-        this.applyRowsToStore(entityType, originalRows);
-        return errors;
+        if (operations.length === 0) {
+            return;
+        }
+
+        this.pendingRequests.push({
+            id: `pending-${this.nextPendingId++}`,
+            method: payload.method,
+            entityType: payload.entityType,
+            summary: this.buildMutationSummary(
+                payload.method,
+                payload.entityType,
+                operations,
+            ),
+            beforeRows: this.cloneRows(payload.beforeRows),
+            afterRows: this.cloneRows(payload.afterRows),
+            operations,
+        });
+        this.syncVisibleEntityRows(new Set([payload.entityType]));
+        this.onPendingChange?.();
+    }
+
+    private getRowsForTableView(entityType: EntityType): Record<string, unknown>[] {
+        let rows = this.getStoreRows(entityType);
+        for (const entry of this.pendingRequests) {
+            if (entry.method === "GET" || entry.entityType !== entityType) {
+                continue;
+            }
+            rows = this.applyMutationOperationsToRows(rows, entry.operations);
+        }
+        return this.cloneRows(rows);
+    }
+
+    private getStoreRows(entityType: EntityType): Record<string, unknown>[] {
+        return Array.from(this.store.getTableForType(entityType).values())
+            .map((row) => ({ ...(row as Record<string, unknown>) }))
+            .sort((a, b) =>
+                String(a.id ?? "").localeCompare(String(b.id ?? "")),
+            );
+    }
+
+    private computeMutationOperations(
+        beforeRows: Record<string, unknown>[],
+        afterRows: Record<string, unknown>[],
+    ): PendingMutationOperation[] {
+        const operations: PendingMutationOperation[] = [];
+        const beforeById = new Map(
+            beforeRows
+                .map((row) => [String(row.id ?? ""), row] as const)
+                .filter(([id]) => id.length > 0),
+        );
+        const afterById = new Map(
+            afterRows
+                .map((row) => [String(row.id ?? ""), row] as const)
+                .filter(([id]) => id.length > 0),
+        );
+
+        for (const [rowId, afterRow] of afterById) {
+            const beforeRow = beforeById.get(rowId);
+            if (!beforeRow) {
+                operations.push({
+                    kind: "insert",
+                    rowId,
+                    row: { ...afterRow },
+                });
+                continue;
+            }
+            const changes: Record<string, unknown> = {};
+            for (const key of Object.keys(afterRow)) {
+                if (key === "id") {
+                    continue;
+                }
+                if (
+                    JSON.stringify(beforeRow[key]) !==
+                    JSON.stringify(afterRow[key])
+                ) {
+                    changes[key] = afterRow[key];
+                }
+            }
+            if (Object.keys(changes).length > 0) {
+                operations.push({
+                    kind: "update",
+                    rowId,
+                    changes,
+                });
+            }
+        }
+
+        for (const rowId of beforeById.keys()) {
+            if (!afterById.has(rowId)) {
+                operations.push({
+                    kind: "delete",
+                    rowId,
+                });
+            }
+        }
+
+        return operations;
+    }
+
+    private applyMutationOperationsToRows(
+        rows: Record<string, unknown>[],
+        operations: PendingMutationOperation[],
+    ): Record<string, unknown>[] {
+        const byId = new Map(
+            rows
+                .map((row) => [String(row.id ?? ""), { ...row }] as const)
+                .filter(([id]) => id.length > 0),
+        );
+        for (const op of operations) {
+            if (op.kind === "insert") {
+                byId.set(op.rowId, { ...op.row });
+                continue;
+            }
+            if (op.kind === "delete") {
+                byId.delete(op.rowId);
+                continue;
+            }
+            const current = byId.get(op.rowId) ?? { id: op.rowId };
+            byId.set(op.rowId, {
+                ...current,
+                ...op.changes,
+                id: op.rowId,
+            });
+        }
+        return Array.from(byId.values()).sort((a, b) =>
+            String(a.id ?? "").localeCompare(String(b.id ?? "")),
+        );
+    }
+
+    private clonePendingEntry(entry: PendingRequestEntry): PendingRequestEntry {
+        if (entry.method === "GET") {
+            return {
+                ...entry,
+                selectedTargets: [...entry.selectedTargets],
+            };
+        }
+        return {
+            ...entry,
+            beforeRows: this.cloneRows(entry.beforeRows),
+            afterRows: this.cloneRows(entry.afterRows),
+            operations: entry.operations.map((op) => {
+                if (op.kind === "insert") {
+                    return { ...op, row: { ...op.row } };
+                }
+                if (op.kind === "update") {
+                    return { ...op, changes: { ...op.changes } };
+                }
+                return { ...op };
+            }),
+        };
+    }
+
+    private buildGetSummary(entityType: EntityType, selectedTargets: string[]): string {
+        if (selectedTargets.length === 1) {
+            const label = this.formatGetSelectionToken(selectedTargets[0]);
+            return `[GET] ${entityType}: ${label}`;
+        }
+        return `[GET] ${entityType}: ${selectedTargets.length} selections`;
+    }
+
+    private buildMutationSummary(
+        method: "POST" | "PUT" | "DELETE",
+        entityType: EntityType,
+        operations: PendingMutationOperation[],
+    ): string {
+        if (operations.length === 1) {
+            const op = operations[0];
+            if (op.kind === "insert") {
+                return `[${method}] ${entityType}: add row ${op.rowId}`;
+            }
+            if (op.kind === "delete") {
+                return `[${method}] ${entityType}: remove row ${op.rowId}`;
+            }
+            const fields = Object.keys(op.changes);
+            if (fields.length === 1) {
+                return `[${method}] ${entityType}: ${op.rowId}.${fields[0]}`;
+            }
+            return `[${method}] ${entityType}: ${op.rowId} (${fields.length} fields)`;
+        }
+        return `[${method}] ${entityType}: ${operations.length} changes`;
+    }
+
+    private formatGetSelectionToken(token: string): string {
+        if (token.startsWith("row:")) {
+            return `row ${token.slice(4)}`;
+        }
+        if (token.startsWith("field:")) {
+            const rest = token.slice(6);
+            const colon = rest.indexOf(":");
+            if (colon >= 0) {
+                const rowId = rest.slice(0, colon);
+                const field = rest.slice(colon + 1);
+                return `${field} (row ${rowId})`;
+            }
+        }
+        return token;
+    }
+
+    private getEntryMismatchReason(
+        entry: PendingRequestEntry,
+        objective: ApiRequestObjective,
+    ): string | undefined {
+        if (entry.method !== objective.method) {
+            return `expected ${objective.method}, got ${entry.method}`;
+        }
+        if (entry.entityType !== objective.targetType) {
+            return `expected ${objective.targetType}, got ${entry.entityType}`;
+        }
+
+        if (entry.method === "GET") {
+            const selectedTargets = entry.selectedTargets;
+            if (selectedTargets.length === 0) {
+                return "GET request has no saved selections";
+            }
+            if (objective.targetRowId && objective.targetField) {
+                const requiredToken = `field:${objective.targetRowId}:${objective.targetField}`;
+                if (!selectedTargets.includes(requiredToken)) {
+                    return `GET must include field ${objective.targetField} on row id ${objective.targetRowId}`;
+                }
+                return undefined;
+            }
+            if (objective.targetRowId) {
+                const rowToken = `row:${objective.targetRowId}`;
+                const hasRowSelection = selectedTargets.some(
+                    (token) =>
+                        token === rowToken ||
+                        token.startsWith(`field:${objective.targetRowId}:`),
+                );
+                if (!hasRowSelection) {
+                    return `GET must include selection for row id ${objective.targetRowId}`;
+                }
+                return undefined;
+            }
+            return undefined;
+        }
+
+        const specificError = this.validateSpecificMutationRequest(
+            objective,
+            entry.beforeRows,
+            entry.afterRows,
+        );
+        return specificError;
+    }
+
+    private isComparableObjective(
+        entry: PendingRequestEntry,
+        objective: ApiRequestObjective,
+    ): boolean {
+        return (
+            entry.method === objective.method &&
+            entry.entityType === objective.targetType
+        );
+    }
+
+    private commitMutationEntry(entry: Exclude<PendingRequestEntry, { method: "GET" }>): void {
+        const currentRows = this.getStoreRows(entry.entityType);
+        const nextRows = this.applyMutationOperationsToRows(
+            currentRows,
+            entry.operations,
+        );
+        this.applyRowsToStore(entry.entityType, nextRows);
+    }
+
+    private syncVisibleEntityRows(entityTypes: Set<EntityType>): void {
+        for (const entityType of entityTypes) {
+            this.tableViewModal.applyExternalRowsIfVisible(
+                entityType,
+                this.getRowsForTableView(entityType) as TableRowData[],
+            );
+        }
     }
 
     private validateSpecificMutationRequest(

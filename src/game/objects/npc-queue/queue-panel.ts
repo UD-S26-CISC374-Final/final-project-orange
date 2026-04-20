@@ -102,4 +102,25 @@ export class QueuePanel extends Phaser.GameObjects.Container {
             });
         });
     }
+
+    /** Brief red tint when a request submission was rejected. */
+    flashNpcFailure(npcId: string, onComplete?: () => void): void {
+        const portrait = this.portraitByNpcId.get(npcId);
+        if (!portrait) {
+            onComplete?.();
+            return;
+        }
+        const scene = this.scene;
+        portrait.setTint(0xff4444);
+        scene.time.delayedCall(120, () => {
+            portrait.clearTint();
+            scene.time.delayedCall(60, () => {
+                portrait.setTint(0xdd2222);
+                scene.time.delayedCall(120, () => {
+                    portrait.clearTint();
+                    onComplete?.();
+                });
+            });
+        });
+    }
 }

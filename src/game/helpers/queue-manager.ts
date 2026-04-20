@@ -36,7 +36,7 @@ export class QueueManager {
     private store: ERStore;
     private activeQueue: QueueEntry[] = [];
     private inQueue: Set<string> = new Set();
-    private currentDifficulty: Difficulty = 1;
+    private maxUnlockedDifficulty: Difficulty = 1;
 
     constructor(store: ERStore) {
         this.store = store;
@@ -55,12 +55,12 @@ export class QueueManager {
     }
 
     increaseDifficulty() {
-        if (this.currentDifficulty < 3) {
-            this.currentDifficulty = (this.currentDifficulty + 1) as Difficulty;
+        if (this.maxUnlockedDifficulty < 3) {
+            this.maxUnlockedDifficulty = (this.maxUnlockedDifficulty + 1) as Difficulty;
         }
     }
 
-    /** Call after `erDiagram.submitCurrentRequest()` succeeds for an NPC task. */
+    /** Call after a matched pending request has been confirmed for an NPC task. */
     completeNpcEntry(entry: QueueEntry): void {
         this.activeQueue = this.activeQueue.filter(
             (e) => e.npc.id !== entry.npc.id,
@@ -79,15 +79,20 @@ export class QueueManager {
         return available[Math.floor(Math.random() * available.length)];
     }
 
+    private pickRandomDifficulty(): Difficulty {
+        return (Math.floor(Math.random() * this.maxUnlockedDifficulty) + 1) as Difficulty;
+    }
+
     private pickQuestion(npc: User): Question {
+        const difficulty = this.pickRandomDifficulty();
         let pool: QuestionFn[];
-        if (this.currentDifficulty === 1) pool = easyQuestions;
-        else if (this.currentDifficulty === 2) pool = mediumQuestions;
+        if (difficulty === 1) pool = easyQuestions;
+        else if (difficulty === 2) pool = mediumQuestions;
         else pool = hardQuestions;
 
         const questionFn = pool[Math.floor(Math.random() * pool.length)];
         const draft = questionFn(npc, this.store);
-        const mode = difficultyToDisplayMode(this.currentDifficulty);
+        const mode = difficultyToDisplayMode(difficulty);
         const dialogue = formatNpcRequestDialogue(
             draft.objective,
             draft.naturalDialogue,
@@ -95,7 +100,7 @@ export class QueueManager {
         );
         return {
             dialogue,
-            difficulty: this.currentDifficulty,
+            difficulty,
             objective: draft.objective,
             naturalDialogue: draft.naturalDialogue,
         };

@@ -5,12 +5,14 @@ import {
     ERDiagram,
     buildDefaultStore,
     type ApiRequestMethod,
+    type ConfirmPendingRequestCandidate,
     type EntityType,
 } from "../objects/er-diagram/diagram-handler";
 import { METHOD_UI_COLORS } from "../helpers/method-ui-colors";
 import { QueueManager, type QueueEntry } from "../helpers/queue-manager";
 import { QueuePanel } from "../objects/npc-queue/queue-panel";
 import { NPCDialogueModal } from "../objects/npc-queue/npc-dialogue-modal";
+import { PendingRequestsPanel } from "../objects/pending-requests-panel";
 
 export class MainGame extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -18,6 +20,7 @@ export class MainGame extends Scene {
     private queueManager?: QueueManager;
     private queuePanel?: QueuePanel;
     private dialogueModal?: NPCDialogueModal;
+    private pendingRequestsPanel?: PendingRequestsPanel;
     private score = 0;
     private unlockOrder: EntityType[] = [
         "PET",
@@ -35,11 +38,16 @@ export class MainGame extends Scene {
     ];
     private methodButtons = new Map<
         ApiRequestMethod,
-        Phaser.GameObjects.Text
+        {
+            container: Phaser.GameObjects.Container;
+            box: Phaser.GameObjects.Rectangle;
+            label: Phaser.GameObjects.Text;
+        }
     >();
     private requestKindText?: Phaser.GameObjects.Text;
-    /** Queue entry whose objective is active (for bottom-bar Confirm without using the modal). */
-    private activeNpcEntry?: QueueEntry;
+    private submitButton?: Phaser.GameObjects.Text;
+    private methodHotkeyHandler?: (event: KeyboardEvent) => void;
+    private failureFlashOverlay?: Phaser.GameObjects.Rectangle;
 
     constructor() {
         super("MainGame");
@@ -62,22 +70,27 @@ export class MainGame extends Scene {
                 "VEHICLE",
                 "EMPLOYMENT",
             ],
+            onPendingChange: () => {
+                this.pendingRequestsPanel?.refresh();
+                this.updateConfirmButtonState();
+            },
         });
+
+        this.pendingRequestsPanel = new PendingRequestsPanel(
+            this,
+            this.scale.width - 272,
+            72,
+            this.erDiagram,
+        );
 
         this.queueManager = new QueueManager(store);
         this.queueManager.init();
 
         this.dialogueModal = new NPCDialogueModal(this);
 
-        this.queuePanel = new QueuePanel(
-            this,
-            this.queueManager,
-            (entry) => {
-                this.activeNpcEntry = entry;
-                this.erDiagram!.startRequest(entry.question.objective);
-                this.dialogueModal!.show(entry);
-            },
-        );
+        this.queuePanel = new QueuePanel(this, this.queueManager, (entry) => {
+            this.dialogueModal!.show(entry);
+        });
 
         // used for debugging until new tables are unlocked via difficulty increase
         this.add
@@ -101,6 +114,7 @@ export class MainGame extends Scene {
         });
 
         this.createRequestHud();
+        this.createFailureFlashOverlay();
 
         EventBus.emit("current-scene-ready", this);
     }
@@ -109,7 +123,6 @@ export class MainGame extends Scene {
         const points = this.queueManager!.getPointValue(entry);
         this.score += points;
         console.log(`${this.score}`);
-        this.queuePanel!.draw();
     }
 
     update() {}
@@ -134,36 +147,107 @@ export class MainGame extends Scene {
             })
             .setDepth(10);
 
+        const infoButton = this.add
+            .text(inventoryX + inventoryWidth - 48, inventoryY + 10, "ⓘ", {
+                color: "#111",
+                fontSize: "22px",
+                fontStyle: "bold",
+                backgroundColor: "#ffffff",
+                padding: { x: 8, y: 5 },
+            })
+            .setDepth(11)
+            .setInteractive({ useHandCursor: true });
+        infoButton.setStroke("#333333", 2);
+
+        const infoBox = this.add
+            .text(
+                inventoryX + 20,
+                inventoryY - 22,
+                "Pro Tip: Use number keys to select request types",
+                {
+                    color: "#111",
+                    fontSize: "15px",
+                    backgroundColor: "#fff7cc",
+                    padding: { x: 10, y: 8 },
+                },
+            )
+            .setDepth(11)
+            .setVisible(false);
+        infoBox.setStroke("#8a6d3b", 2);
+        infoButton.on("pointerdown", () => {
+            infoBox.setVisible(true);
+            this.time.delayedCall(2200, () => infoBox.setVisible(false));
+        });
+
         let x = inventoryX + 18;
         const y = inventoryY + 52;
-        for (const method of this.requestMethods) {
+        for (let index = 0; index < this.requestMethods.length; index += 1) {
+            const method = this.requestMethods[index];
             const colors = METHOD_UI_COLORS[method];
-            const button = this.add
-                .text(x, y, method, {
+            const buttonWidth = 86;
+            const buttonHeight = 34;
+            const buttonBox = this.add.rectangle(
+                buttonWidth / 2,
+                buttonHeight / 2,
+                buttonWidth,
+                buttonHeight,
+                this.toColorNumber(colors.background),
+                1,
+            );
+            const buttonLabel = this.add.text(
+                buttonWidth / 2,
+                buttonHeight / 2,
+                `${index + 1}. ${method}`,
+                {
                     color: colors.text,
-                    fontSize: "16px",
-                    backgroundColor: colors.background,
-                    padding: { x: 8, y: 6 },
-                })
+                    fontSize: "15px",
+                    fontStyle: "bold",
+                },
+            );
+            buttonLabel.setOrigin(0.5);
+            const buttonContainer = this.add
+                .container(x, y, [buttonBox, buttonLabel])
                 .setDepth(10)
+                .setSize(buttonWidth, buttonHeight);
+            const hitArea = this.add
+                .rectangle(
+                    buttonWidth / 2,
+                    buttonHeight / 2,
+                    buttonWidth,
+                    buttonHeight,
+                    0x000000,
+                    0,
+                )
                 .setInteractive({ useHandCursor: true });
-            button.on("pointerdown", () => this.selectMethod(method));
-            this.methodButtons.set(method, button);
+            hitArea.on("pointerup", () => this.selectMethod(method));
+            buttonContainer.add(hitArea);
+            this.methodButtons.set(method, {
+                container: buttonContainer,
+                box: buttonBox,
+                label: buttonLabel,
+            });
             this.styleMethodButton(method, false);
-            x += 90;
+            x += 96;
         }
+        this.bindMethodHotkeys();
 
-        const submitButton = this.add
-            .text(inventoryX + inventoryWidth - 184, inventoryY - 42, "Confirm Request", {
-                color: "#ffffff",
-                fontSize: "16px",
-                fontStyle: "bold",
-                backgroundColor: "#0b8f08",
-                padding: { x: 10, y: 7 },
-            })
+        this.submitButton = this.add
+            .text(
+                inventoryX + inventoryWidth - 184,
+                inventoryY - 42,
+                "Confirm Request(s)",
+                {
+                    color: "#ffffff",
+                    fontSize: "16px",
+                    fontStyle: "bold",
+                    backgroundColor: "#0b8f08",
+                    padding: { x: 10, y: 7 },
+                },
+            )
             .setDepth(10)
             .setInteractive({ useHandCursor: true });
-        submitButton.on("pointerdown", () => this.submitRequest());
+        this.submitButton.on("pointerdown", () => this.submitRequest());
+        this.updateConfirmButtonState();
     }
 
     private styleMethodButton(method: ApiRequestMethod, selected: boolean) {
@@ -172,18 +256,23 @@ export class MainGame extends Scene {
             return;
         }
         const colors = METHOD_UI_COLORS[method];
-        button.setStyle({
-            fontSize: selected ? "18px" : "16px",
-            fontStyle: selected ? "bold" : "normal",
+        button.box.setFillStyle(
+            this.toColorNumber(
+                selected ? colors.selectedBackground : colors.background,
+            ),
+            1,
+        );
+        if (selected) {
+            button.box.setStrokeStyle(4, 0x000000, 1);
+        } else {
+            button.box.setStrokeStyle();
+        }
+        button.label.setStyle({
+            fontSize: selected ? "16px" : "15px",
+            fontStyle: "bold",
             color: colors.text,
-            backgroundColor: selected
-                ? colors.selectedBackground
-                : colors.background,
-            padding: selected ? { x: 12, y: 8 } : { x: 8, y: 6 },
-            stroke: selected ? "#ffffff" : "#000000",
-            strokeThickness: selected ? 6 : 0,
         });
-        button.setDepth(selected ? 12 : 10);
+        button.container.setDepth(selected ? 12 : 10);
     }
 
     private selectMethod(method: ApiRequestMethod) {
@@ -195,33 +284,166 @@ export class MainGame extends Scene {
     }
 
     private submitRequest() {
-        if (!this.erDiagram || !this.activeNpcEntry) {
-            return;
-        }
-        const result = this.erDiagram.submitCurrentRequest();
-        if (!result.ok) {
-            return;
-        }
-        const entry = this.activeNpcEntry;
-        this.activeNpcEntry = undefined;
-
-        this.queuePanel!.flashNpcSuccess(entry.npc.id, () => {
-            this.queueManager!.completeNpcEntry(entry);
-            this.addScore(entry);
-            this.resetAfterNpcRequest();
-            this.dialogueModal?.hide();
-        });
-    }
-
-    private resetAfterNpcRequest() {
         if (!this.erDiagram) {
             return;
         }
-        this.erDiagram.clearCurrentRequest();
-        this.erDiagram.clearSelectedRequestMethod();
-        this.requestKindText?.setText("Cache Method: --");
-        for (const m of this.requestMethods) {
-            this.styleMethodButton(m, false);
+        if (!this.erDiagram.hasPendingChanges()) {
+            this.flashFailureOverlay();
+            return;
         }
+        const queueSnapshot = [...this.queueManager!.getQueue()];
+        const candidates: ConfirmPendingRequestCandidate[] = queueSnapshot.map(
+            (entry) => ({
+                npcId: entry.npc.id,
+                objective: entry.question.objective,
+            }),
+        );
+        const result = this.erDiagram.confirmPendingRequests(candidates);
+
+        if (result.unmatched.length > 0) {
+            this.flashFailureOverlay();
+            for (const unmatched of result.unmatched) {
+                console.warn(
+                    `Pending request "${unmatched.summary}" did not match any active NPC request: ${unmatched.reason}`,
+                );
+            }
+        }
+
+        if (result.matched.length === 0) {
+            return;
+        }
+
+        const matchedNpcIds = Array.from(
+            new Set(result.matched.map((match) => match.npcId)),
+        );
+        const queueByNpcId = new Map(
+            queueSnapshot.map((entry) => [entry.npc.id, entry] as const),
+        );
+        let remainingAnimations = matchedNpcIds.length;
+        const onSuccessComplete = () => {
+            remainingAnimations -= 1;
+            if (remainingAnimations <= 0) {
+                this.queuePanel!.draw();
+            }
+        };
+
+        for (const npcId of matchedNpcIds) {
+            const entry = queueByNpcId.get(npcId);
+            if (!entry) {
+                onSuccessComplete();
+                continue;
+            }
+            this.queuePanel!.flashNpcSuccess(npcId, () => {
+                this.queueManager!.completeNpcEntry(entry);
+                this.addScore(entry);
+                onSuccessComplete();
+            });
+        }
+    }
+
+    private updateConfirmButtonState() {
+        if (!this.submitButton) {
+            return;
+        }
+        const canConfirm = Boolean(this.erDiagram?.hasPendingChanges());
+        this.submitButton.setStyle({
+            backgroundColor: canConfirm ? "#0b8f08" : "#8a8a8a",
+            color: canConfirm ? "#ffffff" : "#e4e4e4",
+        });
+        this.submitButton.setAlpha(canConfirm ? 1 : 0.75);
+        if (canConfirm) {
+            this.submitButton.setInteractive({ useHandCursor: true });
+        } else {
+            this.submitButton.disableInteractive();
+        }
+    }
+
+    private createFailureFlashOverlay() {
+        this.failureFlashOverlay = this.add
+            .rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                0xff0000,
+                0.45,
+            )
+            .setDepth(2000)
+            .setVisible(false)
+            .setScrollFactor(0);
+    }
+
+    private flashFailureOverlay() {
+        if (!this.failureFlashOverlay) {
+            return;
+        }
+        this.failureFlashOverlay.setAlpha(0.45).setVisible(true);
+        this.tweens.killTweensOf(this.failureFlashOverlay);
+        this.tweens.add({
+            targets: this.failureFlashOverlay,
+            alpha: 0,
+            duration: 220,
+            ease: "Quad.easeOut",
+            onComplete: () => {
+                this.failureFlashOverlay?.setVisible(false);
+            },
+        });
+    }
+
+    private bindMethodHotkeys() {
+        if (!this.input.keyboard || this.methodHotkeyHandler) {
+            return;
+        }
+        this.methodHotkeyHandler = (event: KeyboardEvent) => {
+            if (event.repeat) {
+                return;
+            }
+            const method = this.methodForDigit(event.key, event.code);
+            if (method) {
+                this.selectMethod(method);
+            }
+        };
+        this.input.keyboard.on("keydown", this.methodHotkeyHandler);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            if (!this.input.keyboard || !this.methodHotkeyHandler) {
+                return;
+            }
+            this.input.keyboard.off("keydown", this.methodHotkeyHandler);
+            this.methodHotkeyHandler = undefined;
+        });
+    }
+
+    private methodForDigit(
+        key: string,
+        code?: string,
+    ): ApiRequestMethod | undefined {
+        if (code === "Numpad1") {
+            return "GET";
+        }
+        if (code === "Numpad2") {
+            return "POST";
+        }
+        if (code === "Numpad3") {
+            return "PUT";
+        }
+        if (code === "Numpad4") {
+            return "DELETE";
+        }
+        switch (key) {
+            case "1":
+                return "GET";
+            case "2":
+                return "POST";
+            case "3":
+                return "PUT";
+            case "4":
+                return "DELETE";
+            default:
+                return undefined;
+        }
+    }
+
+    private toColorNumber(hexColor: string): number {
+        return Phaser.Display.Color.HexStringToColor(hexColor).color;
     }
 }

@@ -2,7 +2,6 @@ import Phaser from "phaser";
 import { type QueueEntry } from "../../helpers/queue-manager";
 
 export class NPCDialogueModal {
-    private readonly scene: Phaser.Scene;
     private readonly container: Phaser.GameObjects.Container;
     private readonly background: Phaser.GameObjects.Rectangle;
     private readonly nameText: Phaser.GameObjects.Text;
@@ -10,8 +9,6 @@ export class NPCDialogueModal {
     private readonly closeButton: Phaser.GameObjects.Text;
 
     constructor(scene: Phaser.Scene) {
-        this.scene = scene;
-
         this.background = scene.add.rectangle(0, 0, 560, 260, 0xffffff, 1);
         this.background.setStrokeStyle(3, 0x000000, 1);
         this.background.setOrigin(0.5);
