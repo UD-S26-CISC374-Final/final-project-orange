@@ -12,6 +12,7 @@
 ## Cosmetic
 
 - [ ] Update NPC Picture (sadly)
+- [ ] Add incdicator for clickable NPCs
 - [ ] Implement basic sounds for correct/incorrect
 - [ ] Add ambient background song (or just noise)
 - [ ] Slightly animated background (maybe just particle effects)
