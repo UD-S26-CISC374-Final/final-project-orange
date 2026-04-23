@@ -24,7 +24,8 @@ export class Preloader extends Scene {
 
     preload() {
         //  Load the assets for the game - Replace with your own assets
-        this.load.setPath("assets");
+        const baseUrl = import.meta.env.BASE_URL;
+        this.load.setPath(`${baseUrl}assets/`);
 
         this.load.image("logo", "logo.png");
         this.load.image("star", "star.png");

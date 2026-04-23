@@ -5,7 +5,6 @@ import {
 } from "../../helpers/method-ui-colors";
 import {
     TableViewModal,
-    type RowData as TableRowData,
     type TableViewSavePayload,
 } from "./table-view-modal";
 
@@ -62,6 +61,9 @@ export interface Vehicle {
     price: number;
 }
 
+export type TableScalar = string | number | boolean | null;
+export type TableRow = Record<string, TableScalar>;
+
 export interface RelationshipDef {
     fromType: EntityType;
     toType: EntityType;
@@ -79,7 +81,7 @@ export interface ApiRequestObjective {
     targetRowId?: string;
     targetField?: string;
     /** For POST: non-id columns that the new row must match (e.g. USER name/age/feeling/money). */
-    expectedInsertFields?: Record<string, unknown>;
+    expectedInsertFields?: Partial<TableRow>;
 }
 
 export interface RequestValidationResult {
@@ -108,7 +110,7 @@ export type PendingMutationOperation =
     | {
           kind: "insert";
           rowId: string;
-          row: Record<string, unknown>;
+          row: TableRow;
       }
     | {
           kind: "delete";
@@ -117,7 +119,7 @@ export type PendingMutationOperation =
     | {
           kind: "update";
           rowId: string;
-          changes: Record<string, unknown>;
+          changes: Partial<TableRow>;
       };
 
 export type PendingRequestEntry =
@@ -133,8 +135,8 @@ export type PendingRequestEntry =
           method: "POST" | "PUT" | "DELETE";
           entityType: EntityType;
           summary: string;
-          beforeRows: Record<string, unknown>[];
-          afterRows: Record<string, unknown>[];
+          beforeRows: TableRow[];
+          afterRows: TableRow[];
           operations: PendingMutationOperation[];
       };
 
@@ -240,6 +242,17 @@ const TABLE_LAYOUTS: TableLayout[] = [
     },
 ];
 
+function rowIdOf(row: TableRow): string {
+    return typeof row.id === "string" ? row.id : "";
+}
+
+function toDisplayString(value: TableScalar | undefined): string {
+    if (value === null || value === undefined) {
+        return "";
+    }
+    return String(value);
+}
+
 export class ERStore {
     users = new Map<ID, User>();
     pets = new Map<ID, Pet>();
@@ -248,7 +261,7 @@ export class ERStore {
     houses = new Map<ID, House>();
     vehicles = new Map<ID, Vehicle>();
 
-    getTableForType(type: EntityType): Map<ID, unknown> {
+    getTableForType(type: EntityType): Map<ID, TableRow> {
         switch (type) {
             case "USER":
                 return this.users;
@@ -318,6 +331,67 @@ export class ERStore {
 
         return errors;
     }
+}
+
+function createDefaultStore(): ERStore {
+    const store = new ERStore();
+    store.users.set("u1", {
+        id: "u1",
+        name: "Alice",
+        age: 22,
+        feeling: "happy",
+        money: 500,
+    });
+    store.users.set("u2", {
+        id: "u2",
+        name: "Bob",
+        age: 30,
+        feeling: "focused",
+        money: 900,
+    });
+    store.users.set("u3", {
+        id: "u3",
+        name: "Carol",
+        age: 28,
+        feeling: "angry",
+        money: 3200,
+    });
+    store.users.set("u4", {
+        id: "u4",
+        name: "David",
+        age: 48,
+        feeling: "87000",
+        money: 1500,
+    });
+    store.pets.set("p1", {
+        id: "p1",
+        species: "dog",
+        name: "Cleo",
+        age: 3,
+        ownerId: "u1",
+    });
+    store.jobs.set("j1", {
+        id: "j1",
+        title: "Engineer",
+        yearlySalary: 95000,
+        location: "Remote",
+    });
+    store.employments.set("e1", { id: "e1", userId: "u1", jobId: "j1" });
+    store.houses.set("h1", {
+        id: "h1",
+        ownerId: "u1",
+        color: "blue",
+        listingPrice: 320000,
+    });
+    store.vehicles.set("v1", {
+        id: "v1",
+        houseId: "h1",
+        color: "red",
+        year: 2022,
+        model: "sedan",
+        price: 25000,
+    });
+    return store;
 }
 
 class EntityNodeView extends Phaser.GameObjects.Container {
@@ -459,7 +533,7 @@ export class ERDiagram {
 
     constructor(scene: Phaser.Scene, options?: ERDiagramOptions) {
         this.scene = scene;
-        this.store = options?.store ?? buildDefaultStore();
+        this.store = options?.store ?? createDefaultStore();
         this.xOffset = options?.x ?? 0;
         this.yOffset = options?.y ?? 0;
 
@@ -717,20 +791,15 @@ export class ERDiagram {
         }
     }
 
-    private cloneRows(
-        rows: Record<string, unknown>[],
-    ): Record<string, unknown>[] {
+    private cloneRows(rows: TableRow[]): TableRow[] {
         return rows.map((row) => ({ ...row }));
     }
 
-    private applyRowsToStore(
-        entityType: EntityType,
-        rows: Record<string, unknown>[],
-    ) {
+    private applyRowsToStore(entityType: EntityType, rows: TableRow[]) {
         const tableMap = this.store.getTableForType(entityType);
         tableMap.clear();
         for (const row of rows) {
-            const rowId = String(row.id ?? "");
+            const rowId = rowIdOf(row);
             if (!rowId) {
                 continue;
             }
@@ -785,9 +854,7 @@ export class ERDiagram {
         this.onPendingChange?.();
     }
 
-    private getRowsForTableView(
-        entityType: EntityType,
-    ): Record<string, unknown>[] {
+    private getRowsForTableView(entityType: EntityType): TableRow[] {
         let rows = this.getStoreRows(entityType);
         for (const entry of this.pendingRequests) {
             if (entry.method === "GET" || entry.entityType !== entityType) {
@@ -798,27 +865,25 @@ export class ERDiagram {
         return this.cloneRows(rows);
     }
 
-    private getStoreRows(entityType: EntityType): Record<string, unknown>[] {
+    private getStoreRows(entityType: EntityType): TableRow[] {
         return Array.from(this.store.getTableForType(entityType).values())
-            .map((row) => ({ ...(row as Record<string, unknown>) }))
-            .sort((a, b) =>
-                String(a.id ?? "").localeCompare(String(b.id ?? "")),
-            );
+            .map((row) => ({ ...row }))
+            .sort((a, b) => rowIdOf(a).localeCompare(rowIdOf(b)));
     }
 
     private computeMutationOperations(
-        beforeRows: Record<string, unknown>[],
-        afterRows: Record<string, unknown>[],
+        beforeRows: TableRow[],
+        afterRows: TableRow[],
     ): PendingMutationOperation[] {
         const operations: PendingMutationOperation[] = [];
         const beforeById = new Map(
             beforeRows
-                .map((row) => [String(row.id ?? ""), row] as const)
+                .map((row) => [rowIdOf(row), row] as const)
                 .filter(([id]) => id.length > 0),
         );
         const afterById = new Map(
             afterRows
-                .map((row) => [String(row.id ?? ""), row] as const)
+                .map((row) => [rowIdOf(row), row] as const)
                 .filter(([id]) => id.length > 0),
         );
 
@@ -832,7 +897,7 @@ export class ERDiagram {
                 });
                 continue;
             }
-            const changes: Record<string, unknown> = {};
+            const changes: Partial<TableRow> = {};
             for (const key of Object.keys(afterRow)) {
                 if (key === "id") {
                     continue;
@@ -866,12 +931,12 @@ export class ERDiagram {
     }
 
     private applyMutationOperationsToRows(
-        rows: Record<string, unknown>[],
+        rows: TableRow[],
         operations: PendingMutationOperation[],
-    ): Record<string, unknown>[] {
+    ): TableRow[] {
         const byId = new Map(
             rows
-                .map((row) => [String(row.id ?? ""), { ...row }] as const)
+                .map((row) => [rowIdOf(row), { ...row }] as const)
                 .filter(([id]) => id.length > 0),
         );
         for (const op of operations) {
@@ -891,7 +956,7 @@ export class ERDiagram {
             });
         }
         return Array.from(byId.values()).sort((a, b) =>
-            String(a.id ?? "").localeCompare(String(b.id ?? "")),
+            rowIdOf(a).localeCompare(rowIdOf(b)),
         );
     }
 
@@ -1038,24 +1103,24 @@ export class ERDiagram {
         for (const entityType of entityTypes) {
             this.tableViewModal.applyExternalRowsIfVisible(
                 entityType,
-                this.getRowsForTableView(entityType) as TableRowData[],
+                this.getRowsForTableView(entityType),
             );
         }
     }
 
     private validateSpecificMutationRequest(
         request: ApiRequestObjective,
-        beforeRows: Record<string, unknown>[],
-        afterRows: Record<string, unknown>[],
+        beforeRows: TableRow[],
+        afterRows: TableRow[],
     ): string | undefined {
         if (request.method === "POST" && request.expectedInsertFields) {
             const beforeIds = new Set(
                 beforeRows
-                    .map((row) => String(row.id ?? ""))
+                    .map((row) => rowIdOf(row))
                     .filter((id) => id.length > 0),
             );
             const inserted = afterRows.filter((row) => {
-                const id = String(row.id ?? "");
+                const id = rowIdOf(row);
                 return id.length > 0 && !beforeIds.has(id);
             });
             if (inserted.length !== 1) {
@@ -1067,7 +1132,7 @@ export class ERDiagram {
             )) {
                 const actual = newRow[key];
                 if (!this.valuesMatchInsertExpectation(actual, expected)) {
-                    return `New row must have ${key} = ${String(expected)} (got ${String(actual)}).`;
+                    return `New row must have ${key} = ${toDisplayString(expected)} (got ${toDisplayString(actual)}).`;
                 }
             }
             return undefined;
@@ -1077,12 +1142,12 @@ export class ERDiagram {
         }
         const beforeById = new Map(
             beforeRows
-                .map((row) => [String(row.id ?? ""), row] as const)
+                .map((row) => [rowIdOf(row), row] as const)
                 .filter(([id]) => id.length > 0),
         );
         const afterById = new Map(
             afterRows
-                .map((row) => [String(row.id ?? ""), row] as const)
+                .map((row) => [rowIdOf(row), row] as const)
                 .filter(([id]) => id.length > 0),
         );
         const beforeRow = beforeById.get(request.targetRowId);
@@ -1127,8 +1192,8 @@ export class ERDiagram {
     }
 
     private valuesMatchInsertExpectation(
-        actual: unknown,
-        expected: unknown,
+        actual: TableScalar | undefined,
+        expected: TableScalar,
     ): boolean {
         if (actual === expected) {
             return true;
@@ -1140,67 +1205,10 @@ export class ERDiagram {
         if (typeof expected === "number" && typeof actual === "number") {
             return actual === expected;
         }
-        return String(actual) === String(expected);
+        return toDisplayString(actual) === toDisplayString(expected);
     }
 }
 
 export function buildDefaultStore(): ERStore {
-    const store = new ERStore();
-    store.users.set("u1", {
-        id: "u1",
-        name: "Alice",
-        age: 22,
-        feeling: "happy",
-        money: 500,
-    });
-    store.users.set("u2", {
-        id: "u2",
-        name: "Bob",
-        age: 30,
-        feeling: "focused",
-        money: 900,
-    });
-    store.users.set("u3", {
-        id: "u3",
-        name: "Carol",
-        age: 28,
-        feeling: "angry",
-        money: 3200,
-    });
-    store.users.set("u4", {
-        id: "u4",
-        name: "David",
-        age: 48,
-        feeling: "87000",
-        money: 1500,
-    });
-    store.pets.set("p1", {
-        id: "p1",
-        species: "dog",
-        name: "Cleo",
-        age: 3,
-        ownerId: "u1",
-    });
-    store.jobs.set("j1", {
-        id: "j1",
-        title: "Engineer",
-        yearlySalary: 95000,
-        location: "Remote",
-    });
-    store.employments.set("e1", { id: "e1", userId: "u1", jobId: "j1" });
-    store.houses.set("h1", {
-        id: "h1",
-        ownerId: "u1",
-        color: "blue",
-        listingPrice: 320000,
-    });
-    store.vehicles.set("v1", {
-        id: "v1",
-        houseId: "h1",
-        color: "red",
-        year: 2022,
-        model: "sedan",
-        price: 25000,
-    });
-    return store;
+    return createDefaultStore();
 }

@@ -13,7 +13,8 @@ export class Boot extends Scene {
     }
 
     preload() {
-        this.load.image("background", "assets/bg.png");
+        const baseUrl = import.meta.env.BASE_URL;
+        this.load.image("background", `${baseUrl}assets/bg.png`);
     }
 
     create() {
