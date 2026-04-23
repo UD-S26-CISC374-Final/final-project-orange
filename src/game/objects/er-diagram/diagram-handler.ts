@@ -16,7 +16,10 @@ export type EntityType =
     | "HOUSE"
     | "VEHICLE";
 
-export interface User {
+export type TableScalar = string | number | boolean | null;
+export type TableRow = Record<string, TableScalar>;
+
+export interface User extends TableRow {
     id: ID;
     name: string;
     age: number;
@@ -24,7 +27,7 @@ export interface User {
     money: number;
 }
 
-export interface Pet {
+export interface Pet extends TableRow {
     id: ID;
     species: string;
     name: string;
@@ -32,27 +35,27 @@ export interface Pet {
     ownerId: ID;
 }
 
-export interface Job {
+export interface Job extends TableRow {
     id: ID;
     title: string;
     yearlySalary: number;
     location: string;
 }
 
-export interface Employment {
+export interface Employment extends TableRow {
     id: ID;
     userId: ID;
     jobId: ID;
 }
 
-export interface House {
+export interface House extends TableRow {
     id: ID;
     ownerId: ID;
     color: string;
     listingPrice: number;
 }
 
-export interface Vehicle {
+export interface Vehicle extends TableRow {
     id: ID;
     houseId: ID;
     color: string;
@@ -60,9 +63,6 @@ export interface Vehicle {
     model: string;
     price: number;
 }
-
-export type TableScalar = string | number | boolean | null;
-export type TableRow = Record<string, TableScalar>;
 
 export interface RelationshipDef {
     fromType: EntityType;
@@ -1130,6 +1130,9 @@ export class ERDiagram {
             for (const [key, expected] of Object.entries(
                 request.expectedInsertFields,
             )) {
+                if (expected === undefined) {
+                    continue;
+                }
                 const actual = newRow[key];
                 if (!this.valuesMatchInsertExpectation(actual, expected)) {
                     return `New row must have ${key} = ${toDisplayString(expected)} (got ${toDisplayString(actual)}).`;
