@@ -29,6 +29,7 @@ export class MainGame extends Scene {
     private dialogueModal?: NPCDialogueModal;
     private pendingRequestsPanel?: PendingRequestsPanel;
     private score = 0;
+    private scoreText?: Phaser.GameObjects.Text;
     private completedRequestCount = 0;
     private timeoutNormalized = 1;
     private timeoutTrack?: Phaser.GameObjects.Rectangle;
@@ -52,7 +53,15 @@ export class MainGame extends Scene {
     private requestKindText?: Phaser.GameObjects.Text;
     private submitButton?: Phaser.GameObjects.Text;
     private methodHotkeyHandler?: (event: KeyboardEvent) => void;
+    private methodHotkeyReleaseHandler?: (event: KeyboardEvent) => void;
+    private enterHoldTimeoutId?: number;
+    private enterKeyDown = false;
+    private enterHoldTriggered = false;
     private failureFlashOverlay?: Phaser.GameObjects.Rectangle;
+    private gameActive = false;
+    private startCountdownTimer?: Phaser.Time.TimerEvent;
+    private startCountdownOverlay?: Phaser.GameObjects.Rectangle;
+    private startCountdownText?: Phaser.GameObjects.Text;
 
     constructor() {
         super("MainGame");
@@ -98,8 +107,10 @@ export class MainGame extends Scene {
         });
 
         this.createTimeoutHud();
+        this.createScoreHud();
         this.createRequestHud();
         this.createFailureFlashOverlay();
+        this.startGameCountdown();
 
         EventBus.emit("current-scene-ready", this);
     }
@@ -107,11 +118,11 @@ export class MainGame extends Scene {
     private addScore(entry: QueueEntry) {
         const points = this.queueManager!.getPointValue(entry);
         this.score += points;
-        console.log(`${this.score}`);
+        this.updateScoreHud();
     }
 
     update(_time: number, delta: number) {
-        if (this.gameOverTriggered) {
+        if (this.gameOverTriggered || !this.gameActive) {
             return;
         }
         const elapsedSeconds = delta / 1000;
@@ -268,6 +279,9 @@ export class MainGame extends Scene {
     }
 
     private selectMethod(method: ApiRequestMethod) {
+        if (!this.gameActive || this.gameOverTriggered) {
+            return;
+        }
         this.erDiagram?.setSelectedRequestMethod(method);
         for (const m of this.requestMethods) {
             this.styleMethodButton(m, m === method);
@@ -276,7 +290,7 @@ export class MainGame extends Scene {
     }
 
     private submitRequest() {
-        if (this.gameOverTriggered || !this.erDiagram) {
+        if (!this.gameActive || this.gameOverTriggered || !this.erDiagram) {
             return;
         }
         if (!this.erDiagram.hasPendingChanges()) {
@@ -351,7 +365,9 @@ export class MainGame extends Scene {
         if (!this.submitButton) {
             return;
         }
-        const canConfirm = Boolean(this.erDiagram?.hasPendingChanges());
+        const canConfirm = Boolean(
+            this.gameActive && this.erDiagram?.hasPendingChanges(),
+        );
         this.submitButton.setStyle({
             backgroundColor: canConfirm ? "#0b8f08" : "#8a8a8a",
             color: canConfirm ? "#ffffff" : "#e4e4e4",
@@ -430,6 +446,25 @@ export class MainGame extends Scene {
         this.timeoutPreviewOutline.setStrokeStyle(2, 0x2f6fff, 1);
 
         this.syncTimeoutBarFill(this.timeoutNormalized);
+    }
+
+    private createScoreHud() {
+        this.scoreText = this.add
+            .text(this.scale.width / 2, 16, "", {
+                color: "#111",
+                fontSize: "18px",
+                fontStyle: "bold",
+                backgroundColor: "#ffffff",
+                padding: { x: 10, y: 5 },
+            })
+            .setDepth(31)
+            .setOrigin(0.5, 0);
+
+        this.updateScoreHud();
+    }
+
+    private updateScoreHud() {
+        this.scoreText?.setText(`Score: ${this.score}`);
     }
 
     private flashFailureOverlay() {
@@ -568,10 +603,48 @@ export class MainGame extends Scene {
     }
 
     private bindMethodHotkeys() {
-        if (!this.input.keyboard || this.methodHotkeyHandler) {
+        if (
+            !this.input.keyboard ||
+            this.methodHotkeyHandler ||
+            this.methodHotkeyReleaseHandler
+        ) {
             return;
         }
         this.methodHotkeyHandler = (event: KeyboardEvent) => {
+            if (!this.gameActive || this.gameOverTriggered) {
+                return;
+            }
+            if (!event.repeat && event.key === "Escape") {
+                if (this.closeTopModalIfOpen()) {
+                    event.preventDefault();
+                }
+                return;
+            }
+            if (this.isEnterKey(event)) {
+                if (event.repeat || this.enterKeyDown) {
+                    return;
+                }
+                this.enterKeyDown = true;
+                this.enterHoldTriggered = false;
+                this.clearEnterHoldTimer();
+                this.enterHoldTimeoutId = window.setTimeout(() => {
+                    this.enterHoldTimeoutId = undefined;
+                    if (
+                        !this.enterKeyDown ||
+                        this.enterHoldTriggered ||
+                        this.gameOverTriggered ||
+                        this.hasOpenModal()
+                    ) {
+                        return;
+                    }
+                    if (!this.erDiagram?.hasPendingChanges()) {
+                        return;
+                    }
+                    this.enterHoldTriggered = true;
+                    this.submitRequest();
+                }, 1000);
+                return;
+            }
             if (event.repeat) {
                 return;
             }
@@ -580,14 +653,157 @@ export class MainGame extends Scene {
                 this.selectMethod(method);
             }
         };
-        this.input.keyboard.on("keydown", this.methodHotkeyHandler);
-        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-            if (!this.input.keyboard || !this.methodHotkeyHandler) {
+        this.methodHotkeyReleaseHandler = (event: KeyboardEvent) => {
+            if (!this.isEnterKey(event)) {
                 return;
             }
-            this.input.keyboard.off("keydown", this.methodHotkeyHandler);
+            this.enterKeyDown = false;
+            this.enterHoldTriggered = false;
+            this.clearEnterHoldTimer();
+        };
+        this.input.keyboard.on("keydown", this.methodHotkeyHandler);
+        this.input.keyboard.on("keyup", this.methodHotkeyReleaseHandler);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            this.clearEnterHoldTimer();
+            if (this.startCountdownTimer) {
+                this.startCountdownTimer.remove(false);
+                this.startCountdownTimer = undefined;
+            }
+            this.clearStartCountdownOverlay();
+            if (!this.input.keyboard) {
+                return;
+            }
+            if (this.methodHotkeyHandler) {
+                this.input.keyboard.off("keydown", this.methodHotkeyHandler);
+            }
+            if (this.methodHotkeyReleaseHandler) {
+                this.input.keyboard.off("keyup", this.methodHotkeyReleaseHandler);
+            }
             this.methodHotkeyHandler = undefined;
+            this.methodHotkeyReleaseHandler = undefined;
         });
+    }
+
+    private startGameCountdown() {
+        this.gameActive = false;
+        this.updateConfirmButtonState();
+        this.input.enabled = false;
+
+        this.startCountdownOverlay = this.add
+            .rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                0x000000,
+                0.35,
+            )
+            .setDepth(2500)
+            .setScrollFactor(0);
+
+        this.startCountdownText = this.add
+            .text(this.scale.width / 2, this.scale.height / 2, "", {
+                color: "#ffffff",
+                fontSize: "140px",
+                fontStyle: "bold",
+                stroke: "#111111",
+                strokeThickness: 10,
+            })
+            .setOrigin(0.5)
+            .setDepth(2501)
+            .setScrollFactor(0);
+
+        let secondsRemaining = 3;
+        this.showCountdownText(`${secondsRemaining}`, false);
+        this.startCountdownTimer = this.time.addEvent({
+            delay: 1000,
+            repeat: 2,
+            callback: () => {
+                secondsRemaining -= 1;
+                if (secondsRemaining > 0) {
+                    this.showCountdownText(`${secondsRemaining}`, false);
+                    return;
+                }
+                this.startGameplayPhase();
+            },
+        });
+    }
+
+    private showCountdownText(text: string, isRush: boolean) {
+        if (!this.startCountdownText) {
+            return;
+        }
+        this.startCountdownText.setText(text);
+        this.startCountdownText.setStyle({
+            color: isRush ? "#ffe066" : "#ffffff",
+            fontSize: isRush ? "108px" : "140px",
+            fontStyle: "bold",
+            stroke: "#111111",
+            strokeThickness: 10,
+        });
+        this.startCountdownText.setScale(0.78);
+        this.startCountdownText.setAlpha(1);
+        this.tweens.killTweensOf(this.startCountdownText);
+        this.tweens.add({
+            targets: this.startCountdownText,
+            scaleX: 1.08,
+            scaleY: 1.08,
+            duration: 260,
+            ease: "Sine.easeOut",
+        });
+    }
+
+    private startGameplayPhase() {
+        this.startCountdownTimer = undefined;
+        this.gameActive = true;
+        this.input.enabled = true;
+        this.updateConfirmButtonState();
+        this.showCountdownText("RUSH!", true);
+        this.time.delayedCall(650, () => {
+            this.clearStartCountdownOverlay();
+        });
+    }
+
+    private clearStartCountdownOverlay() {
+        if (this.startCountdownText) {
+            this.tweens.killTweensOf(this.startCountdownText);
+        }
+        this.startCountdownText?.destroy();
+        this.startCountdownText = undefined;
+        this.startCountdownOverlay?.destroy();
+        this.startCountdownOverlay = undefined;
+    }
+
+    private clearEnterHoldTimer() {
+        if (this.enterHoldTimeoutId === undefined) {
+            return;
+        }
+        window.clearTimeout(this.enterHoldTimeoutId);
+        this.enterHoldTimeoutId = undefined;
+    }
+
+    private isEnterKey(event: KeyboardEvent): boolean {
+        return event.key === "Enter" || event.code === "NumpadEnter";
+    }
+
+    private hasOpenModal(): boolean {
+        return Boolean(
+            this.dialogueModal?.isVisible() || this.erDiagram?.hasOpenModalLayer(),
+        );
+    }
+
+    private closeTopModalIfOpen(): boolean {
+        if (this.erDiagram?.isTableRowEditorVisible()) {
+            return this.erDiagram.closeTopModalLayer();
+        }
+        if (this.dialogueModal?.isVisible()) {
+            this.dialogueModal.hide();
+            return true;
+        }
+        if (this.erDiagram?.isTableModalVisible()) {
+            return this.erDiagram.closeTopModalLayer();
+        }
+        return false;
     }
 
     private methodForDigit(

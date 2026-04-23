@@ -342,7 +342,7 @@ export class TableViewModal {
         this.rowEditorActiveColumn = undefined;
         this.currentPageIndex = 0;
         this.editorScrollOffset = 0;
-        this.isEditMode = false;
+        this.isEditMode = this.canEditCurrentTable && this.currentMode !== "GET";
         this.titleText.setText(`${entityType} table data`);
         this.renderTable();
         this.overlayBlocker.setVisible(true);
@@ -366,6 +366,30 @@ export class TableViewModal {
         this.isEditMode = false;
         this.overlayBlocker.setVisible(false);
         this.container.setVisible(false);
+    }
+
+    isVisible(): boolean {
+        return this.container.visible;
+    }
+
+    isRowEditorVisible(): boolean {
+        return this.rowEditorVisible;
+    }
+
+    hasOpenLayer(): boolean {
+        return this.container.visible || this.rowEditorVisible;
+    }
+
+    closeTopLayer(): boolean {
+        if (this.rowEditorVisible) {
+            this.closeRowEditor();
+            return true;
+        }
+        if (this.container.visible) {
+            this.hide();
+            return true;
+        }
+        return false;
     }
 
     private buildTableText(rows: RowData[]): string {
@@ -1257,10 +1281,6 @@ export class TableViewModal {
                 existingValue,
             );
             this.renderRowEditorFields();
-            return;
-        }
-        if (event.key === "Escape") {
-            this.closeRowEditor();
             return;
         }
         if (event.key.length !== 1) {

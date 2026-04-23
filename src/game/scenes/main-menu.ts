@@ -8,7 +8,10 @@ export class MainMenu extends Scene implements ChangeableScene {
     background: GameObjects.Image;
     logo: GameObjects.Image;
     title: GameObjects.Text;
+    startPrompt?: GameObjects.Text;
     logoTween: Phaser.Tweens.Tween | null;
+    private enterStartHandler?: (event: KeyboardEvent) => void;
+    private startTriggered = false;
 
     constructor() {
         super("MainMenu");
@@ -18,24 +21,85 @@ export class MainMenu extends Scene implements ChangeableScene {
         const grid = new DataLoader(this);
         grid.buildGrid(this.scale.width, this.scale.height);
 
-        this.logo = this.add.image(512, 300, "logo").setDepth(100);
+        this.logo = this.add
+            .image(this.scale.width / 2, this.scale.height * 0.38, "logo")
+            .setDepth(100);
+        const maxLogoWidth = this.scale.width * 0.78;
+        const maxLogoHeight = this.scale.height * 0.9;
+        const logoScale = Math.min(
+            maxLogoWidth / this.logo.width,
+            maxLogoHeight / this.logo.height,
+        );
+        this.logo.setScale(logoScale);
 
-        this.title = this.add
-            .text(512, 460, "RushAPI Start Screen", {
-                fontFamily: "Arial Black",
-                fontSize: 38,
-                color: "#ffffff",
-                stroke: "#000000",
-                strokeThickness: 8,
-                align: "center",
-            })
+        this.startPrompt = this.add
+            .text(
+                this.scale.width / 2,
+                this.scale.height * 0.78,
+                "Press Enter to Start",
+                {
+                    fontFamily: "Arial Black",
+                    fontSize: "34px",
+                    color: "#ffffff",
+                    stroke: "#000000",
+                    strokeThickness: 7,
+                    align: "center",
+                },
+            )
             .setOrigin(0.5)
             .setDepth(100);
+
+        this.tweens.add({
+            targets: this.startPrompt,
+            alpha: 0.35,
+            duration: 700,
+            ease: "Sine.easeInOut",
+            yoyo: true,
+            repeat: -1,
+        });
+
+        if (this.input.keyboard) {
+            this.enterStartHandler = (event: KeyboardEvent) => {
+                if (event.repeat) {
+                    return;
+                }
+                const isEnterKey =
+                    event.key === "Enter" || event.code === "NumpadEnter";
+                if (!isEnterKey) {
+                    return;
+                }
+                event.preventDefault();
+                this.changeScene();
+            };
+            this.input.keyboard.on("keydown", this.enterStartHandler);
+        }
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            if (this.input.keyboard && this.enterStartHandler) {
+                this.input.keyboard.off("keydown", this.enterStartHandler);
+            }
+            this.enterStartHandler = undefined;
+        });
+
+        // this.title = this.add
+        //     .text(512, 460, "RushAPI Start Screen", {
+        //         fontFamily: "Arial Black",
+        //         fontSize: 38,
+        //         color: "#ffffff",
+        //         stroke: "#000000",
+        //         strokeThickness: 8,
+        //         align: "center",
+        //     })
+        //     .setOrigin(0.5)
+        //     .setDepth(100);
 
         EventBus.emit("current-scene-ready", this);
     }
 
     changeScene() {
+        if (this.startTriggered) {
+            return;
+        }
+        this.startTriggered = true;
         if (this.logoTween) {
             this.logoTween.stop();
             this.logoTween = null;
