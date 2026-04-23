@@ -10,7 +10,8 @@ export type QuestionDraft = {
     naturalDialogue: string;
 };
 
-export function makeAgeQuestion(npc: User, _store: ERStore): QuestionDraft {
+export function makeAgeQuestion(npc: User, store: ERStore): QuestionDraft {
+    void store;
     const newAge = npc.age + Math.floor(Math.random() * 10) + 1;
     return {
         objective: {
@@ -28,7 +29,8 @@ function bumpMoney(base: number): number {
     return base + (Math.floor(Math.random() * 5) + 1) * 100;
 }
 
-function makeFeelingQuestion(npc: User, _store: ERStore): QuestionDraft {
+function makeFeelingQuestion(npc: User, store: ERStore): QuestionDraft {
+    void store;
     const options = ["excited", "calm", "curious", "grateful", "confident"];
     const newFeeling = options[Math.floor(Math.random() * options.length)];
     return {
@@ -43,7 +45,8 @@ function makeFeelingQuestion(npc: User, _store: ERStore): QuestionDraft {
     };
 }
 
-function makeMoneyQuestion(npc: User, _store: ERStore): QuestionDraft {
+function makeMoneyQuestion(npc: User, store: ERStore): QuestionDraft {
+    void store;
     const newMoney = bumpMoney(npc.money);
     return {
         objective: {
@@ -57,7 +60,8 @@ function makeMoneyQuestion(npc: User, _store: ERStore): QuestionDraft {
     };
 }
 
-function makeUserGetQuestion(npc: User, _store: ERStore): QuestionDraft {
+function makeUserGetQuestion(npc: User, store: ERStore): QuestionDraft {
+    void store;
     return {
         objective: {
             method: "GET",

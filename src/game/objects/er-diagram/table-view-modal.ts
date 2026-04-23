@@ -1,7 +1,31 @@
-import type { ApiRequestMethod, EntityType } from "./diagram-handler";
+import type {
+    ApiRequestMethod,
+    EntityType,
+    TableScalar,
+} from "./diagram-handler";
 import { METHOD_MODAL_SURFACE, METHOD_UI_COLORS } from "../../helpers/method-ui-colors";
 
-export type RowData = Record<string, unknown>;
+export type RowData = Record<string, TableScalar>;
+
+type PointerEventDataWithStopPropagation = Phaser.Types.Input.EventData & {
+    stopPropagation: () => void;
+};
+
+function stopPointerEventPropagation(event: Phaser.Types.Input.EventData): void {
+    const pointerEvent = event as PointerEventDataWithStopPropagation;
+    pointerEvent.stopPropagation();
+}
+
+function rowCellToString(value: TableScalar | undefined): string {
+    if (value === null || value === undefined) {
+        return "";
+    }
+    return String(value);
+}
+
+function rowIdOf(row: RowData, fallback: string): string {
+    return typeof row.id === "string" ? row.id : fallback;
+}
 
 type MutationKind = "none" | "insert" | "update" | "delete";
 
@@ -101,13 +125,13 @@ export class TableViewModal {
             .setVisible(false)
             .setInteractive({ useHandCursor: false })
             .on("pointerdown", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-                event.stopPropagation();
+                stopPointerEventPropagation(event);
             })
             .on("pointerup", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-                event.stopPropagation();
+                stopPointerEventPropagation(event);
             })
             .on("pointermove", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-                event.stopPropagation();
+                stopPointerEventPropagation(event);
             });
         this.rowEditorBlocker = scene.add.rectangle(
             scene.scale.width / 2,
@@ -122,13 +146,13 @@ export class TableViewModal {
             .setVisible(false)
             .setInteractive({ useHandCursor: false })
             .on("pointerdown", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-                event.stopPropagation();
+                stopPointerEventPropagation(event);
             })
             .on("pointerup", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-                event.stopPropagation();
+                stopPointerEventPropagation(event);
             })
             .on("pointermove", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
-                event.stopPropagation();
+                stopPointerEventPropagation(event);
             });
         this.background = scene.add.rectangle(0, 0, 760, 360, 0xffffff, 1);
         this.background.setStrokeStyle(3, 0x000000, 1);
@@ -416,14 +440,14 @@ export class TableViewModal {
                 this.isReadonlyColumn(column)
                     ? `${column} (readonly)`.length
                     : column.length,
-                ...rows.map((row) => String(row[column] ?? "").length),
+                ...rows.map((row) => rowCellToString(row[column]).length),
             ),
         );
 
         const header = this.joinRow(headerColumns, widths);
         const separator = widths.map((width) => "-".repeat(width)).join("-+-");
         const body = pageRows.map((row) => {
-            const values = columns.map((column) => String(row[column] ?? ""));
+            const values = columns.map((column) => rowCellToString(row[column]));
             return this.joinRow(values, widths);
         });
 
@@ -784,7 +808,7 @@ export class TableViewModal {
                 this.editorContainer.add(labelText);
                 this.editorObjects.push(labelText);
 
-                const value = String(this.stagedRows[rowIndex][column] ?? "");
+                const value = rowCellToString(this.stagedRows[rowIndex][column]);
                 const deleteFieldPrefix =
                     this.currentMode === "DELETE" && !readonly && !rowMarkedForDelete
                         ? fieldMarkedForDelete
@@ -934,7 +958,10 @@ export class TableViewModal {
         let y = -120;
         for (let localIndex = 0; localIndex < pageRows.length; localIndex += 1) {
             const rowIndex = pageStart + localIndex;
-            const rowId = String(this.currentRows[rowIndex]?.id ?? `row-${rowIndex + 1}`);
+            const rowId = rowIdOf(
+                this.currentRows[rowIndex],
+                `row-${rowIndex + 1}`,
+            );
             const rowTarget = `row:${rowId}`;
             const rowSelected = this.selectedGetTargets.has(rowTarget);
             const rowPrefix = rowSelected ? "[x] " : "[ ] ";
@@ -966,7 +993,7 @@ export class TableViewModal {
             for (const column of columns) {
                 const fieldTarget = `field:${rowId}:${column}`;
                 const fieldSelected = this.selectedGetTargets.has(fieldTarget);
-                const value = String(this.currentRows[rowIndex][column] ?? "");
+                const value = rowCellToString(this.currentRows[rowIndex][column]);
                 const fieldText = this.scene.add
                     .text(-335, y, `${column}: ${value}`, {
                         color: fieldSelected ? "#ffffff" : pal.accentText,
@@ -1026,7 +1053,10 @@ export class TableViewModal {
         return column.toLowerCase().endsWith("id");
     }
 
-    private coerceValue(nextValue: string, existingValue: unknown): unknown {
+    private coerceValue(
+        nextValue: string,
+        existingValue: TableScalar | undefined,
+    ): TableScalar {
         if (typeof existingValue === "number") {
             const parsed = Number(nextValue);
             return Number.isNaN(parsed) ? existingValue : parsed;
@@ -1051,7 +1081,7 @@ export class TableViewModal {
 
     private buildNextId(): string {
         const allIds = [...this.currentRows, ...this.stagedRows]
-            .map((row) => String(row.id ?? ""))
+            .map((row) => rowIdOf(row, ""))
             .filter((id) => id.length > 0);
         let maxNumeric = 0;
         let prefix = this.getDefaultIdPrefix();
@@ -1165,9 +1195,14 @@ export class TableViewModal {
     }
 
     private buildInitialRowData(): RowData {
-        const referenceRow = this.stagedRows[0] ?? this.currentRows[0];
+        const referenceRow =
+            this.stagedRows.length > 0 ?
+                this.stagedRows[0]
+            : this.currentRows.length > 0 ?
+                this.currentRows[0]
+            : undefined;
         const row: RowData = {};
-        if (referenceRow) {
+        if (referenceRow !== undefined) {
             for (const [column, value] of Object.entries(referenceRow)) {
                 if (this.isReadonlyColumn(column)) {
                     row[column] = this.buildNextId();
@@ -1247,7 +1282,7 @@ export class TableViewModal {
                 fontSize: "14px",
                 fontStyle: "bold",
             });
-            const value = String(this.rowEditorDraft[column] ?? "");
+            const value = rowCellToString(this.rowEditorDraft[column]);
             const valueText = this.scene.add.text(-34, y, isActive ? `${value}_` : value, {
                 color: readonly ? "#666" : pal.accentText,
                 fontSize: "14px",
@@ -1273,7 +1308,7 @@ export class TableViewModal {
         }
         const column = this.rowEditorActiveColumn;
         const existingValue = this.rowEditorDraft[column];
-        const currentValue = String(this.rowEditorDraft[column] ?? "");
+        const currentValue = rowCellToString(this.rowEditorDraft[column]);
         if (event.key === "Backspace") {
             event.preventDefault();
             this.rowEditorDraft[column] = this.coerceValue(

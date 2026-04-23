@@ -7,10 +7,11 @@ export type EntityKey =
     | "HOUSE"
     | "VEHICLE";
 
-export type RowData = Record<string, unknown>;
+type CellValue = string | number | boolean | null;
+export type RowData = Record<string, CellValue>;
 
 export type TableStoreLike = {
-    getTableForType(type: EntityKey): Map<string, unknown>;
+    getTableForType(type: EntityKey): Map<string, RowData>;
 };
 
 export type DiffLine =
@@ -20,8 +21,8 @@ export type DiffLine =
           rowId: string;
           field: string;
           label: string;
-          before: unknown;
-          after: unknown;
+          before: CellValue | undefined;
+          after: CellValue | undefined;
       }
     | {
           kind: "insert";
@@ -38,10 +39,12 @@ export type DiffLine =
           row: RowData;
       };
 
+function getRowId(row: RowData): string {
+    return typeof row.id === "string" ? row.id : "";
+}
+
 function sortRows(rows: RowData[]): RowData[] {
-    return [...rows].sort((a, b) =>
-        String(a.id ?? "").localeCompare(String(b.id ?? "")),
-    );
+    return [...rows].sort((a, b) => getRowId(a).localeCompare(getRowId(b)));
 }
 
 export function rowsDeepEqualToStore(
@@ -50,7 +53,7 @@ export function rowsDeepEqualToStore(
     pending: RowData[],
 ): boolean {
     const storeRows = Array.from(store.getTableForType(entityType).values()).map(
-        (r) => r as RowData,
+        (row) => ({ ...row }),
     );
     return (
         JSON.stringify(sortRows(pending)) === JSON.stringify(sortRows(storeRows))
@@ -66,15 +69,14 @@ export function computePendingDiffs(
     for (const [entityType, pendingRows] of pendingByTable) {
         const tableMap = store.getTableForType(entityType);
         const storeById = new Map(
-            Array.from(tableMap.values()).map((r) => {
-                const row = r as RowData;
-                return [String(row.id ?? ""), row] as const;
+            Array.from(tableMap.values()).map((row) => {
+                return [getRowId(row), row] as const;
             }),
         );
-        const pendingIds = new Set(pendingRows.map((r) => String(r.id ?? "")));
+        const pendingIds = new Set(pendingRows.map((row) => getRowId(row)));
 
         for (const pr of pendingRows) {
-            const id = String(pr.id ?? "");
+            const id = getRowId(pr);
             if (!id) continue;
             const sr = storeById.get(id);
             if (!sr) {
@@ -112,7 +114,7 @@ export function computePendingDiffs(
                     entityType,
                     rowId: sid,
                     label: `${entityType}: removed row ${sid}`,
-                    row: { ...(sr as RowData) },
+                    row: { ...sr },
                 });
             }
         }
