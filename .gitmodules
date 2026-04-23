@@ -1,0 +1,3 @@
+[submodule "EGDD/EGDD/egdd"]
+	path = EGDD/EGDD/egdd
+	url = https://github.com/bruceb04/egdd.git
