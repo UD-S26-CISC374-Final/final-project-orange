@@ -60,4 +60,8 @@ export class NPCDialogueModal {
     hide() {
         this.container.setVisible(false);
     }
+
+    isVisible(): boolean {
+        return this.container.visible;
+    }
 }

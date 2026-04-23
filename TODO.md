@@ -8,6 +8,8 @@
 - [ ] Add basic tutorial for first time players
 - [ ] Add increased keyboard functionality for "pro" users
 - [ ] Add "help" menu for hotkeys/replay tutorial
+- [x] Enter button to confirm requests
+- [x] esc Key to close modal
 
 ## Cosmetic
 

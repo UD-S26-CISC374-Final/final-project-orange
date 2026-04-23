@@ -499,6 +499,22 @@ export class ERDiagram {
         return this.pendingRequests.length > 0;
     }
 
+    hasOpenModalLayer(): boolean {
+        return this.tableViewModal.hasOpenLayer();
+    }
+
+    isTableModalVisible(): boolean {
+        return this.tableViewModal.isVisible();
+    }
+
+    isTableRowEditorVisible(): boolean {
+        return this.tableViewModal.isRowEditorVisible();
+    }
+
+    closeTopModalLayer(): boolean {
+        return this.tableViewModal.closeTopLayer();
+    }
+
     confirmPendingRequests(
         candidates: ConfirmPendingRequestCandidate[],
     ): ConfirmPendingRequestsResult {

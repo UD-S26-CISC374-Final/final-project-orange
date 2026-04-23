@@ -10,6 +10,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
     private cards: Phaser.GameObjects.Container[] = [];
     private portraitByNpcId = new Map<string, Phaser.GameObjects.Image>();
     private cardByNpcId = new Map<string, Phaser.GameObjects.Container>();
+    private bubbleByNpcId = new Map<string, Phaser.GameObjects.Container>();
     private onSelect: (entry: QueueEntry) => void;
 
     constructor(
@@ -27,10 +28,14 @@ export class QueuePanel extends Phaser.GameObjects.Container {
     }
 
     draw() {
+        this.bubbleByNpcId.forEach((bubble) => {
+            this.scene.tweens.killTweensOf(bubble);
+        });
         this.cards.forEach(c => c.destroy());
         this.cards = [];
         this.portraitByNpcId.clear();
         this.cardByNpcId.clear();
+        this.bubbleByNpcId.clear();
 
         const queue = this.queueManager.getQueue();
 
@@ -60,20 +65,12 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         this.cardByNpcId.set(entry.npc.id, card);
         card.add(portrait);
 
+        this.showNpcBubble(entry.npc.id, card, portrait.x + 26, portrait.y - 58);
+
         const hitArea = this.scene.add
             .rectangle(0, 0, SPRITE_WIDTH, SPRITE_HEIGHT + 20, 0x000000, 0)
             .setOrigin(0);
         hitArea.setInteractive({ useHandCursor: true });
-
-        hitArea.on("pointerover", () => {
-            name.setStyle({ color: "#2f6fff" });
-            portrait.setAlpha(0.8);
-        });
-
-        hitArea.on("pointerout", () => {
-            name.setStyle({ color: "#111111" });
-            portrait.setAlpha(1);
-        });
 
         hitArea.on("pointerup", () => {
             this.onSelect(entry);
@@ -81,6 +78,36 @@ export class QueuePanel extends Phaser.GameObjects.Container {
 
         card.add(hitArea);
         return card;
+    }
+
+    private showNpcBubble(
+        npcId: string,
+        card: Phaser.GameObjects.Container,
+        x: number,
+        y: number,
+    ): void {
+        const bubbleBg = this.scene.add
+            .ellipse(x, y, 34, 22, 0xffffff, 0.95)
+            .setStrokeStyle(2, 0x222222, 1);
+        const bubbleText = this.scene.add
+            .text(x, y - 1, "...", {
+                color: "#222222",
+                fontSize: "16px",
+                fontStyle: "bold",
+            })
+            .setOrigin(0.5);
+        const bubble = this.scene.add.container(0, 0, [bubbleBg, bubbleText]);
+        card.add(bubble);
+        this.bubbleByNpcId.set(npcId, bubble);
+
+        this.scene.tweens.add({
+            targets: bubble,
+            y: -3,
+            duration: 450,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.easeInOut",
+        });
     }
 
     /**
