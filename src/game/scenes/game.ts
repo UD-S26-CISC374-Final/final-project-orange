@@ -13,13 +13,15 @@ import { QueuePanel } from "../objects/npc-queue/queue-panel";
 import { NPCDialogueModal } from "../objects/npc-queue/npc-dialogue-modal";
 import { PendingRequestsPanel } from "../objects/pending-requests-panel";
 
-const TIMEOUT_DRAIN_SECONDS = 90;
+const TIMEOUT_DRAIN_SECONDS = 120;
 const TIMEOUT_REWARD_PER_CORRECT = 0.06;
 const TIMEOUT_PENALTY_PER_INCORRECT = 0.08;
+const TIMEOUT_BOSS_REWARD = 100;
 const TIMEOUT_BAR_HEIGHT = 210;
 const TIMEOUT_BAR_WIDTH = 20;
 const TIMEOUT_BAR_X = 22;
 const TIMEOUT_BAR_Y = 54;
+const BOSS_SCORE_THRESHOLD = 49;
 
 export class MainGame extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -29,6 +31,7 @@ export class MainGame extends Scene {
     private dialogueModal?: NPCDialogueModal;
     private pendingRequestsPanel?: PendingRequestsPanel;
     private score = 0;
+    private lastBossSpawnScore = 0;
     private scoreText?: Phaser.GameObjects.Text;
     private completedRequestCount = 0;
     private timeoutNormalized = 1;
@@ -58,6 +61,8 @@ export class MainGame extends Scene {
     private enterKeyDown = false;
     private enterHoldTriggered = false;
     private failureFlashOverlay?: Phaser.GameObjects.Rectangle;
+    private bossSuccessOverlay?: Phaser.GameObjects.Rectangle;
+    private bossSuccessText?: Phaser.GameObjects.Text;
     private gameActive = false;
     private startCountdownTimer?: Phaser.Time.TimerEvent;
     private startCountdownOverlay?: Phaser.GameObjects.Rectangle;
@@ -68,7 +73,6 @@ export class MainGame extends Scene {
     }
 
     create() {
-        // load the background grid
         const grid = new DataLoader(this);
         grid.buildGrid(this.scale.width, this.scale.height);
         grid.loadGameComponents(this);
@@ -110,6 +114,7 @@ export class MainGame extends Scene {
         this.createScoreHud();
         this.createRequestHud();
         this.createFailureFlashOverlay();
+        this.createBossSuccessOverlay();
         this.startGameCountdown();
 
         EventBus.emit("current-scene-ready", this);
@@ -119,6 +124,19 @@ export class MainGame extends Scene {
         const points = this.queueManager!.getPointValue(entry);
         this.score += points;
         this.updateScoreHud();
+        this.checkBossSpawn();
+    }
+
+    private checkBossSpawn() {
+        if (!this.queueManager || !this.queuePanel) return;
+        if (this.queueManager.hasBossInQueue()) return;
+
+        const scoresSinceLastBoss = this.score - this.lastBossSpawnScore;
+        if (scoresSinceLastBoss >= BOSS_SCORE_THRESHOLD) {
+            this.lastBossSpawnScore = this.score;
+            this.queueManager.spawnBoss();
+            this.queuePanel.draw();
+        }
     }
 
     update(_time: number, delta: number) {
@@ -353,12 +371,89 @@ export class MainGame extends Scene {
                         onSuccessComplete();
                         return;
                     }
+                    const wasBoss = entry.isBoss === true;
                     this.queueManager!.completeNpcEntry(entry);
                     this.addScore(entry);
+
+                    if (wasBoss) {
+                        this.onBossDefeated();
+                    }
+
                     onSuccessComplete();
                 },
             );
         }
+    }
+
+    private onBossDefeated() {
+        // big timeout refill
+        this.applyTimeoutBurst(TIMEOUT_BOSS_REWARD);
+
+        // increase difficulty for future NPCs
+        this.queueManager!.increaseDifficulty();
+
+        // flash gold overlay with message
+        this.flashBossSuccessOverlay();
+    }
+
+    private createBossSuccessOverlay() {
+        this.bossSuccessOverlay = this.add
+            .rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                0xffaa00,
+                0.35,
+            )
+            .setDepth(2000)
+            .setVisible(false)
+            .setScrollFactor(0);
+
+        this.bossSuccessText = this.add
+            .text(this.scale.width / 2, this.scale.height / 2, "BOSS DEFEATED!\n+Time Refill", {
+                color: "#ffffff",
+                fontSize: "48px",
+                fontStyle: "bold",
+                stroke: "#aa5500",
+                strokeThickness: 8,
+                align: "center",
+            })
+            .setOrigin(0.5)
+            .setDepth(2001)
+            .setVisible(false)
+            .setScrollFactor(0);
+    }
+
+    private flashBossSuccessOverlay() {
+        if (!this.bossSuccessOverlay || !this.bossSuccessText) return;
+
+        this.bossSuccessOverlay.setAlpha(0.35).setVisible(true);
+        this.bossSuccessText.setAlpha(1).setVisible(true).setScale(0.8);
+
+        this.tweens.killTweensOf(this.bossSuccessOverlay);
+        this.tweens.killTweensOf(this.bossSuccessText);
+
+        this.tweens.add({
+            targets: this.bossSuccessText,
+            scaleX: 1.05,
+            scaleY: 1.05,
+            duration: 300,
+            ease: "Sine.easeOut",
+        });
+
+        this.time.delayedCall(1200, () => {
+            this.tweens.add({
+                targets: [this.bossSuccessOverlay, this.bossSuccessText],
+                alpha: 0,
+                duration: 400,
+                ease: "Quad.easeOut",
+                onComplete: () => {
+                    this.bossSuccessOverlay?.setVisible(false);
+                    this.bossSuccessText?.setVisible(false);
+                },
+            });
+        });
     }
 
     private updateConfirmButtonState() {

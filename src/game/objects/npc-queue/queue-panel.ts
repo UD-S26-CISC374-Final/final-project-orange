@@ -81,19 +81,24 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         cardY: number,
     ): Phaser.GameObjects.Container {
         const card = this.scene.add.container(cardX, cardY);
+        const isBoss = entry.isBoss === true;
+
+        const bgColor = isBoss ? 0xfff8e1 : 0xffffff;
+        const borderColor = isBoss ? 0xcc3300 : 0x333333;
+        const borderWidth = isBoss ? 3 : 1.5;
 
         const cardBg = this.scene.add.rectangle(
             0, 0, CARD_W, CARD_H,
-            0xffffff, 1,
+            bgColor, 1,
         ).setOrigin(0, 0);
-        cardBg.setStrokeStyle(1.5, 0x333333, 1);
+        cardBg.setStrokeStyle(borderWidth, borderColor, 1);
         card.add(cardBg);
 
         const name = this.scene.add.text(
             CARD_W / 2, 5,
             entry.npc.name,
             {
-                color: "#111",
+                color: isBoss ? "#cc3300" : "#111",
                 fontSize: "11px",
                 fontStyle: "bold",
                 fontFamily: "monospace",
@@ -111,6 +116,9 @@ export class QueuePanel extends Phaser.GameObjects.Container {
             SPRITE_HEIGHT / portrait.height,
         );
         portrait.setScale(scaleToFit);
+        if (isBoss) {
+            portrait.setTint(0xff9944);
+        }
         this.portraitByNpcId.set(entry.npc.id, portrait);
         this.cardByNpcId.set(entry.npc.id, card);
         card.add(portrait);
@@ -135,6 +143,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
             card,
             portrait.x + 30,
             portrait.y - 50,
+            isBoss,
         );
 
         const hitArea = this.scene.add
@@ -142,8 +151,9 @@ export class QueuePanel extends Phaser.GameObjects.Container {
             .setOrigin(0);
         hitArea.setInteractive({ useHandCursor: true });
 
-        hitArea.on("pointerover", () => cardBg.setFillStyle(0xeef2ff, 1));
-        hitArea.on("pointerout", () => cardBg.setFillStyle(0xffffff, 1));
+        const hoverColor = isBoss ? 0xffe0cc : 0xeef2ff;
+        hitArea.on("pointerover", () => cardBg.setFillStyle(hoverColor, 1));
+        hitArea.on("pointerout", () => cardBg.setFillStyle(bgColor, 1));
         hitArea.on("pointerup", () => this.onSelect(entry));
 
         card.add(hitArea);
@@ -155,25 +165,31 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         card: Phaser.GameObjects.Container,
         x: number,
         y: number,
+        isBoss: boolean,
     ): void {
+        const bubbleColor = isBoss ? 0xff4400 : 0xffffff;
+        const textColor = isBoss ? "#ffffff" : "#222222";
+        const strokeColor = isBoss ? 0xcc2200 : 0x222222;
+        const bubbleText = isBoss ? "!!!" : "...";
+
         const bubbleBg = this.scene.add
-            .ellipse(x, y, 34, 22, 0xffffff, 0.95)
-            .setStrokeStyle(2, 0x222222, 1);
-        const bubbleText = this.scene.add
-            .text(x, y - 1, "...", {
-                color: "#222222",
+            .ellipse(x, y, 34, 22, bubbleColor, 0.95)
+            .setStrokeStyle(2, strokeColor, 1);
+        const bubbleTxt = this.scene.add
+            .text(x, y - 1, bubbleText, {
+                color: textColor,
                 fontSize: "16px",
                 fontStyle: "bold",
             })
             .setOrigin(0.5);
-        const bubble = this.scene.add.container(0, 0, [bubbleBg, bubbleText]);
+        const bubble = this.scene.add.container(0, 0, [bubbleBg, bubbleTxt]);
         card.add(bubble);
         this.bubbleByNpcId.set(npcId, bubble);
 
         this.scene.tweens.add({
             targets: bubble,
             y: -3,
-            duration: 450,
+            duration: isBoss ? 250 : 450,
             yoyo: true,
             repeat: -1,
             ease: "Sine.easeInOut",

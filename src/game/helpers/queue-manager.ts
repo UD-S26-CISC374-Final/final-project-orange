@@ -20,6 +20,7 @@ export type Question = {
 export type QueueEntry = {
     npc: User;
     question: Question;
+    isBoss?: boolean;
 };
 
 type QuestionFn = (npc: User, store: ERStore) => QuestionDraft;
@@ -37,6 +38,7 @@ export class QueueManager {
     private activeQueue: QueueEntry[] = [];
     private inQueue: Set<string> = new Set();
     private maxUnlockedDifficulty: Difficulty = 1;
+    private bossCount = 0;
 
     constructor(store: ERStore) {
         this.store = store;
@@ -51,13 +53,61 @@ export class QueueManager {
     }
 
     getPointValue(entry: QueueEntry): number {
+        if (entry.isBoss) return entry.question.difficulty * 20;
         return entry.question.difficulty * 10;
+    }
+
+    getBossCount(): number {
+        return this.bossCount;
     }
 
     increaseDifficulty() {
         if (this.maxUnlockedDifficulty < 3) {
             this.maxUnlockedDifficulty = (this.maxUnlockedDifficulty + 1) as Difficulty;
         }
+    }
+
+    hasBossInQueue(): boolean {
+        return this.activeQueue.some((e) => e.isBoss);
+    }
+
+    /** Inserts a boss into the queue, replacing the last slot if full. */
+    spawnBoss(): QueueEntry | null {
+        if (this.hasBossInQueue()) return null;
+
+        const available = this.getAvailableUsers();
+        if (available.length === 0) return null;
+
+        const npc = this.pickRandomUser(available);
+        // boss 1 uses medium, boss 2+ uses hard
+        const bossDifficulty: Difficulty = this.bossCount === 0 ? 2 : 3;
+        const pool: QuestionFn[] = bossDifficulty === 2 ? mediumQuestions : hardQuestions;
+        const questionFn = pool[Math.floor(Math.random() * pool.length)];
+        const draft = questionFn(npc, this.store);
+        const mode = difficultyToDisplayMode(bossDifficulty);
+        const dialogue = formatNpcRequestDialogue(draft.objective, draft.naturalDialogue, mode);
+
+        const question: Question = {
+            dialogue,
+            difficulty: bossDifficulty,
+            objective: draft.objective,
+            naturalDialogue: draft.naturalDialogue,
+        };
+
+        const entry: QueueEntry = { npc, question, isBoss: true };
+
+        // replace last slot if queue is full, otherwise just push
+        if (this.activeQueue.length >= QUEUE_SIZE) {
+            const replaced = this.activeQueue[this.activeQueue.length - 1];
+            this.inQueue.delete(replaced.npc.id);
+            this.activeQueue[this.activeQueue.length - 1] = entry;
+        } else {
+            this.activeQueue.push(entry);
+        }
+
+        this.inQueue.add(npc.id);
+        this.bossCount += 1;
+        return entry;
     }
 
     /** Call after a matched pending request has been confirmed for an NPC task. */

@@ -4,7 +4,7 @@ import { type QueueEntry } from "../../helpers/queue-manager";
 const MODAL_W = 363;
 const MODAL_H = 200;
 const BASE_DEPTH = 500;
-const QUEUE_SECTION_H = 192; // CARD_H(150) + LABEL_HEIGHT(26) + 16
+const QUEUE_SECTION_H = 192;
 
 export class NPCDialogueModal {
     private readonly scene: Phaser.Scene;
