@@ -1,9 +1,13 @@
 import Phaser from "phaser";
 import { QueueManager, type QueueEntry } from "../../helpers/queue-manager";
 
-const SPRITE_WIDTH = 90;
-const SPRITE_HEIGHT = 130;
-const GAP = 24;
+const SPRITE_HEIGHT = 120;
+const GAP = 16;
+const CARD_W = 100;
+const CARD_H = SPRITE_HEIGHT + 10;
+const LABEL_HEIGHT = 26;
+const SECTION_W = (CARD_W * 3) + (GAP * 2) + 32;
+const SECTION_H = CARD_H + LABEL_HEIGHT + 16;
 
 export class QueuePanel extends Phaser.GameObjects.Container {
     private queueManager: QueueManager;
@@ -12,18 +16,41 @@ export class QueuePanel extends Phaser.GameObjects.Container {
     private cardByNpcId = new Map<string, Phaser.GameObjects.Container>();
     private bubbleByNpcId = new Map<string, Phaser.GameObjects.Container>();
     private onSelect: (entry: QueueEntry) => void;
+    readonly panelX: number;
+    readonly panelY: number;
+    readonly panelH: number;
 
     constructor(
         scene: Phaser.Scene,
         queueManager: QueueManager,
         onSelect: (entry: QueueEntry) => void,
     ) {
-        super(scene, 16, scene.scale.height - SPRITE_HEIGHT - 70);
+        const panelX = 10;
+        const panelY = scene.scale.height - SECTION_H;
+        super(scene, panelX, panelY);
 
         this.queueManager = queueManager;
         this.onSelect = onSelect;
+        this.panelX = panelX;
+        this.panelY = panelY;
+        this.panelH = SECTION_H;
+
+        const sectionBg = scene.add.rectangle(
+            0, 0, SECTION_W, SECTION_H,
+            0xfafafa, 1,
+        ).setOrigin(0, 0);
+        sectionBg.setStrokeStyle(2, 0x333333, 1);
+        this.add(sectionBg);
+
+        const label = scene.add.text(10, 6, "Waiting Queue", {
+            color: "#111",
+            fontSize: "15px",
+            fontStyle: "bold",
+        });
+        this.add(label);
 
         scene.add.existing(this);
+        this.setDepth(5);
         this.draw();
     }
 
@@ -40,41 +67,84 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         const queue = this.queueManager.getQueue();
 
         queue.forEach((entry, index) => {
-            const cardX = index * (SPRITE_WIDTH + GAP);
-            const card = this.buildCard(entry, cardX);
+            const cardX = 12 + index * (CARD_W + GAP);
+            const cardY = LABEL_HEIGHT + 6;
+            const card = this.buildCard(entry, cardX, cardY);
             this.cards.push(card);
             this.add(card);
         });
     }
 
-    private buildCard(entry: QueueEntry, cardX: number): Phaser.GameObjects.Container {
-        const card = this.scene.add.container(cardX, 0);
+    private buildCard(
+        entry: QueueEntry,
+        cardX: number,
+        cardY: number,
+    ): Phaser.GameObjects.Container {
+        const card = this.scene.add.container(cardX, cardY);
 
-        const name = this.scene.add.text(SPRITE_WIDTH / 2, 0, entry.npc.name, {
-            color: "#111111",
-            fontSize: "12px",
-            fontStyle: "bold",
-            backgroundColor: "#ffffff",
-            padding: { x: 4, y: 2 },
-        }).setOrigin(0.5, 1);
+        const cardBg = this.scene.add.rectangle(
+            0, 0, CARD_W, CARD_H,
+            0xffffff, 1,
+        ).setOrigin(0, 0);
+        cardBg.setStrokeStyle(1.5, 0x333333, 1);
+        card.add(cardBg);
+
+        const name = this.scene.add.text(
+            CARD_W / 2, 5,
+            entry.npc.name,
+            {
+                color: "#111",
+                fontSize: "11px",
+                fontStyle: "bold",
+                fontFamily: "monospace",
+            },
+        ).setOrigin(0.5, 0);
         card.add(name);
 
-        const portrait = this.scene.add.image(SPRITE_WIDTH / 2, SPRITE_HEIGHT / 2 + 24, "npc");
-        portrait.setDisplaySize(SPRITE_WIDTH, SPRITE_HEIGHT);
+        const portrait = this.scene.add.image(
+            CARD_W / 2,
+            18 + SPRITE_HEIGHT / 2,
+            "npc",
+        );
+        const scaleToFit = Math.min(
+            CARD_W / portrait.width,
+            SPRITE_HEIGHT / portrait.height,
+        );
+        portrait.setScale(scaleToFit);
         this.portraitByNpcId.set(entry.npc.id, portrait);
         this.cardByNpcId.set(entry.npc.id, card);
         card.add(portrait);
 
-        this.showNpcBubble(entry.npc.id, card, portrait.x + 26, portrait.y - 58);
+        const idTag = this.scene.add.text(
+            CARD_W / 2,
+            18 + SPRITE_HEIGHT * 0.72,
+            `[${entry.npc.id}]`,
+            {
+                color: "#111111",
+                fontSize: "10px",
+                fontStyle: "bold",
+                fontFamily: "monospace",
+                stroke: "#ffffff",
+                strokeThickness: 2,
+            },
+        ).setOrigin(0.5, 0.5);
+        card.add(idTag);
+
+        this.showNpcBubble(
+            entry.npc.id,
+            card,
+            portrait.x + 30,
+            portrait.y - 50,
+        );
 
         const hitArea = this.scene.add
-            .rectangle(0, 0, SPRITE_WIDTH, SPRITE_HEIGHT + 20, 0x000000, 0)
+            .rectangle(0, 0, CARD_W, CARD_H, 0x000000, 0)
             .setOrigin(0);
         hitArea.setInteractive({ useHandCursor: true });
 
-        hitArea.on("pointerup", () => {
-            this.onSelect(entry);
-        });
+        hitArea.on("pointerover", () => cardBg.setFillStyle(0xeef2ff, 1));
+        hitArea.on("pointerout", () => cardBg.setFillStyle(0xffffff, 1));
+        hitArea.on("pointerup", () => this.onSelect(entry));
 
         card.add(hitArea);
         return card;
@@ -110,15 +180,9 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         });
     }
 
-    /**
-     * Brief green tint on the NPC portrait (call before removing them from the queue).
-     */
     flashNpcSuccess(npcId: string, statusCode: string, onComplete?: () => void): void {
         const portrait = this.portraitByNpcId.get(npcId);
-        if (!portrait) {
-            onComplete?.();
-            return;
-        }
+        if (!portrait) { onComplete?.(); return; }
         const scene = this.scene;
         this.showStatusCodePop(npcId, statusCode);
         portrait.setTint(0x55ff66);
@@ -137,9 +201,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
     private showStatusCodePop(npcId: string, statusCode: string): void {
         const card = this.cardByNpcId.get(npcId);
         const portrait = this.portraitByNpcId.get(npcId);
-        if (!card || !portrait) {
-            return;
-        }
+        if (!card || !portrait) return;
         const statusText = this.scene.add
             .text(portrait.x, portrait.y - 8, statusCode, {
                 color: "#00a349",
@@ -157,19 +219,13 @@ export class QueuePanel extends Phaser.GameObjects.Container {
             alpha: 0,
             duration: 240,
             ease: "Quad.easeOut",
-            onComplete: () => {
-                statusText.destroy();
-            },
+            onComplete: () => statusText.destroy(),
         });
     }
 
-    /** Brief red tint when a request submission was rejected. */
     flashNpcFailure(npcId: string, onComplete?: () => void): void {
         const portrait = this.portraitByNpcId.get(npcId);
-        if (!portrait) {
-            onComplete?.();
-            return;
-        }
+        if (!portrait) { onComplete?.(); return; }
         const scene = this.scene;
         portrait.setTint(0xff4444);
         scene.time.delayedCall(120, () => {

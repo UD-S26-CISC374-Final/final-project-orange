@@ -37,7 +37,7 @@ export class DataLoader extends Phaser.GameObjects.Graphics {
         const inventoryHeight = 120;
         const hiddenBottomPx = 24;
         const cornerRadius = 18;
-        const inventoryX = (width - inventoryWidth) / 2 + 100;
+        const inventoryX = width - inventoryWidth - 20;
         const inventoryY = height - inventoryHeight + hiddenBottomPx;
 
         const inventory = scene.add.graphics();

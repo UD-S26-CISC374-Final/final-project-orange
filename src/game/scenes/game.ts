@@ -139,7 +139,7 @@ export class MainGame extends Scene {
         const inventoryWidth = Math.floor(width * 0.5);
         const inventoryHeight = 120;
         const hiddenBottomPx = 24;
-        const inventoryX = (width - inventoryWidth) / 2 + 100;
+        const inventoryX = width - inventoryWidth - 20;
         const inventoryY = height - inventoryHeight + hiddenBottomPx;
 
         this.requestKindText = this.add
