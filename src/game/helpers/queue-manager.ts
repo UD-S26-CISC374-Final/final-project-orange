@@ -53,7 +53,7 @@ export class QueueManager {
     }
 
     getPointValue(entry: QueueEntry): number {
-        if (entry.isBoss) return entry.question.difficulty * 20;
+        if (entry.isBoss) return 30;
         return entry.question.difficulty * 10;
     }
 
@@ -71,7 +71,6 @@ export class QueueManager {
         return this.activeQueue.some((e) => e.isBoss);
     }
 
-    /** Inserts a boss into the queue, replacing the last slot if full. */
     spawnBoss(): QueueEntry | null {
         if (this.hasBossInQueue()) return null;
 
@@ -79,24 +78,24 @@ export class QueueManager {
         if (available.length === 0) return null;
 
         const npc = this.pickRandomUser(available);
-        // boss 1 uses medium, boss 2+ uses hard
-        const bossDifficulty: Difficulty = this.bossCount === 0 ? 2 : 3;
-        const pool: QuestionFn[] = bossDifficulty === 2 ? mediumQuestions : hardQuestions;
+
+        // boss 1 uses easy, boss 2 uses medium — pool driven by bossCount before increment
+        const pool: QuestionFn[] = this.bossCount === 0 ? easyQuestions : mediumQuestions;
         const questionFn = pool[Math.floor(Math.random() * pool.length)];
         const draft = questionFn(npc, this.store);
-        const mode = difficultyToDisplayMode(bossDifficulty);
+        const difficulty: Difficulty = this.bossCount === 0 ? 1 : 2;
+        const mode = difficultyToDisplayMode(difficulty);
         const dialogue = formatNpcRequestDialogue(draft.objective, draft.naturalDialogue, mode);
 
         const question: Question = {
             dialogue,
-            difficulty: bossDifficulty,
+            difficulty,
             objective: draft.objective,
             naturalDialogue: draft.naturalDialogue,
         };
 
         const entry: QueueEntry = { npc, question, isBoss: true };
 
-        // replace last slot if queue is full, otherwise just push
         if (this.activeQueue.length >= QUEUE_SIZE) {
             const replaced = this.activeQueue[this.activeQueue.length - 1];
             this.inQueue.delete(replaced.npc.id);
@@ -110,12 +109,17 @@ export class QueueManager {
         return entry;
     }
 
-    /** Call after a matched pending request has been confirmed for an NPC task. */
     completeNpcEntry(entry: QueueEntry): void {
         this.activeQueue = this.activeQueue.filter(
             (e) => e.npc.id !== entry.npc.id,
         );
         this.inQueue.delete(entry.npc.id);
+        this.refillQueue();
+    }
+
+    resetQueue() {
+        this.activeQueue = [];
+        this.inQueue.clear();
         this.refillQueue();
     }
 

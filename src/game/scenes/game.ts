@@ -16,12 +16,12 @@ import { PendingRequestsPanel } from "../objects/pending-requests-panel";
 const TIMEOUT_DRAIN_SECONDS = 120;
 const TIMEOUT_REWARD_PER_CORRECT = 0.06;
 const TIMEOUT_PENALTY_PER_INCORRECT = 0.08;
-const TIMEOUT_BOSS_REWARD = 100;
+const TIMEOUT_BOSS_REWARD = 0.35;
 const TIMEOUT_BAR_HEIGHT = 210;
 const TIMEOUT_BAR_WIDTH = 20;
 const TIMEOUT_BAR_X = 22;
 const TIMEOUT_BAR_Y = 54;
-const BOSS_SCORE_THRESHOLD = 49;
+const BOSS_SCORE_THRESHOLD = 30;
 
 export class MainGame extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -386,13 +386,27 @@ export class MainGame extends Scene {
     }
 
     private onBossDefeated() {
-        // big timeout refill
-        this.applyTimeoutBurst(TIMEOUT_BOSS_REWARD);
-
-        // increase difficulty for future NPCs
+        // 1. increase difficulty FIRST so resetQueue picks new questions at new difficulty
         this.queueManager!.increaseDifficulty();
 
-        // flash gold overlay with message
+        // 2. reset queue so all NPCs get fresh questions at the new difficulty
+        this.queueManager!.resetQueue();
+
+        // 3. reveal tables based on how many bosses have been defeated
+        const bossCount = this.queueManager!.getBossCount();
+        if (bossCount === 1) {
+            this.erDiagram!.revealTable("PET");
+            this.erDiagram!.revealTable("HOUSE");
+        } else if (bossCount === 2) {
+            this.erDiagram!.revealTable("JOB");
+            this.erDiagram!.revealTable("VEHICLE");
+            this.erDiagram!.revealTable("EMPLOYMENT");
+        }
+
+        // 4. big timeout refill
+        this.applyTimeoutBurst(TIMEOUT_BOSS_REWARD);
+
+        // 5. flash gold overlay
         this.flashBossSuccessOverlay();
     }
 
