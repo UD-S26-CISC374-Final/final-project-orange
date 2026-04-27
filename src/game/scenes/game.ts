@@ -16,7 +16,7 @@ import { PendingRequestsPanel } from "../objects/pending-requests-panel";
 const TIMEOUT_DRAIN_SECONDS = 120;
 const TIMEOUT_REWARD_PER_CORRECT = 0.06;
 const TIMEOUT_PENALTY_PER_INCORRECT = 0.08;
-const TIMEOUT_BOSS_REWARD = 0.35;
+const TIMEOUT_BOSS_REWARD = 100;
 const TIMEOUT_BAR_HEIGHT = 210;
 const TIMEOUT_BAR_WIDTH = 20;
 const TIMEOUT_BAR_X = 22;
