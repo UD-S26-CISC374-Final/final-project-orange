@@ -1,6 +1,7 @@
 import type { ApiRequestObjective } from "../objects/er-diagram/diagram-handler";
 import { ERStore, type User } from "../objects/er-diagram/diagram-handler";
 import { formatNpcRequestDialogue, type NpcRequestDisplayMode } from "./api-request-dialogue";
+import type { FixedLevelRequest } from "../constants/level_requests";
 import {
     easyQuestions,
     hardQuestions,
@@ -21,6 +22,7 @@ export type QueueEntry = {
     npc: User;
     question: Question;
     isBoss?: boolean;
+    requestId?: string;
 };
 
 type QuestionFn = (npc: User, store: ERStore) => QuestionDraft;
@@ -39,6 +41,9 @@ export class QueueManager {
     private inQueue: Set<string> = new Set();
     private maxUnlockedDifficulty: Difficulty = 1;
     private bossCount = 0;
+    private fixedRequests?: FixedLevelRequest[];
+    private fixedCursor = 0;
+    private fixedDifficulty: Difficulty = 1;
 
     constructor(store: ERStore) {
         this.store = store;
@@ -46,6 +51,49 @@ export class QueueManager {
 
     init() {
         this.refillQueue();
+    }
+
+    startFixedLevel(
+        requests: FixedLevelRequest[],
+        difficulty: Difficulty,
+    ): void {
+        this.fixedRequests = [...requests];
+        this.fixedCursor = 0;
+        this.fixedDifficulty = difficulty;
+        this.activeQueue = [];
+        this.inQueue.clear();
+        this.refillQueue();
+    }
+
+    startEndlessMode(): void {
+        this.fixedRequests = undefined;
+        this.fixedCursor = 0;
+        this.maxUnlockedDifficulty = 3;
+        this.activeQueue = [];
+        this.inQueue.clear();
+        this.refillQueue();
+    }
+
+    isFixedLevelActive(): boolean {
+        return this.fixedRequests !== undefined;
+    }
+
+    isFixedLevelComplete(): boolean {
+        return Boolean(
+            this.fixedRequests &&
+                this.fixedCursor >= this.fixedRequests.length &&
+                this.activeQueue.length === 0,
+        );
+    }
+
+    getFixedLevelProgress(): { completed: number; total: number } {
+        if (!this.fixedRequests) {
+            return { completed: 0, total: 0 };
+        }
+        return {
+            completed: Math.max(0, this.fixedCursor - this.activeQueue.length),
+            total: this.fixedRequests.length,
+        };
     }
 
     getQueue(): QueueEntry[] {
@@ -72,6 +120,7 @@ export class QueueManager {
     }
 
     spawnBoss(): QueueEntry | null {
+        if (this.fixedRequests) return null;
         if (this.hasBossInQueue()) return null;
 
         const available = this.getAvailableUsers();
@@ -110,9 +159,15 @@ export class QueueManager {
     }
 
     completeNpcEntry(entry: QueueEntry): void {
-        this.activeQueue = this.activeQueue.filter(
-            (e) => e.npc.id !== entry.npc.id,
-        );
+        if (entry.requestId) {
+            this.activeQueue = this.activeQueue.filter(
+                (e) => e.requestId !== entry.requestId,
+            );
+        } else {
+            this.activeQueue = this.activeQueue.filter(
+                (e) => e.npc.id !== entry.npc.id,
+            );
+        }
         this.inQueue.delete(entry.npc.id);
         this.refillQueue();
     }
@@ -161,6 +216,10 @@ export class QueueManager {
     }
 
     private refillQueue() {
+        if (this.fixedRequests) {
+            this.refillFixedQueue();
+            return;
+        }
         while (this.activeQueue.length < QUEUE_SIZE) {
             const available = this.getAvailableUsers();
             if (available.length === 0) break;
@@ -170,6 +229,36 @@ export class QueueManager {
 
             this.activeQueue.push({ npc, question });
             this.inQueue.add(npc.id);
+        }
+    }
+
+    private refillFixedQueue() {
+        if (!this.fixedRequests) {
+            return;
+        }
+        while (
+            this.activeQueue.length < QUEUE_SIZE &&
+            this.fixedCursor < this.fixedRequests.length
+        ) {
+            const request = this.fixedRequests[this.fixedCursor];
+            const npc = this.store.users.get(request.npcId);
+            if (!npc) {
+                this.fixedCursor += 1;
+                continue;
+            }
+            const question: Question = {
+                dialogue: request.dialogue,
+                difficulty: this.fixedDifficulty,
+                objective: request.objective,
+                naturalDialogue: request.naturalDialogue,
+            };
+            this.activeQueue.push({
+                npc,
+                question,
+                requestId: request.id,
+            });
+            this.inQueue.add(npc.id);
+            this.fixedCursor += 1;
         }
     }
 }

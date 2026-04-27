@@ -82,6 +82,10 @@ export interface ApiRequestObjective {
     targetField?: string;
     /** For POST: non-id columns that the new row must match (e.g. USER name/age/feeling/money). */
     expectedInsertFields?: Partial<TableRow>;
+    /** For PUT: columns that must be updated to exact values. */
+    expectedUpdateFields?: Partial<TableRow>;
+    /** For DELETE: columns that must be cleared to null. */
+    expectedDeleteFields?: string[];
 }
 
 export interface RequestValidationResult {
@@ -579,6 +583,22 @@ export class ERDiagram {
 
     isTableModalVisible(): boolean {
         return this.tableViewModal.isVisible();
+    }
+
+    getEntityNodeBounds(entityType: EntityType): Phaser.Geom.Rectangle | undefined {
+        return this.nodes.get(entityType)?.getBounds();
+    }
+
+    getTableModalSaveButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        return this.tableViewModal.getSaveButtonBounds();
+    }
+
+    getGetTargetBounds(target: string): Phaser.Geom.Rectangle | undefined {
+        return this.tableViewModal.getGetTargetBounds(target);
+    }
+
+    hasStagedGetTarget(target: string): boolean {
+        return this.tableViewModal.hasGetTargetSelected(target);
     }
 
     isTableRowEditorVisible(): boolean {
@@ -1160,6 +1180,25 @@ export class ERDiagram {
         }
 
         if (request.method === "PUT") {
+            if (request.expectedUpdateFields) {
+                for (const [key, expected] of Object.entries(
+                    request.expectedUpdateFields,
+                )) {
+                    if (expected === undefined) {
+                        continue;
+                    }
+                    const actual = afterRow[key];
+                    if (!this.valuesMatchInsertExpectation(actual, expected)) {
+                        return `PUT must set ${key} = ${toDisplayString(expected)} on row id ${request.targetRowId}.`;
+                    }
+                    if (
+                        this.valuesMatchInsertExpectation(beforeRow[key], expected)
+                    ) {
+                        return `PUT must modify ${key} on row id ${request.targetRowId}.`;
+                    }
+                }
+                return undefined;
+            }
             if (request.targetField) {
                 if (
                     beforeRow[request.targetField] ===
@@ -1176,6 +1215,17 @@ export class ERDiagram {
         }
 
         if (request.method === "DELETE") {
+            if (
+                request.expectedDeleteFields &&
+                request.expectedDeleteFields.length > 0
+            ) {
+                for (const field of request.expectedDeleteFields) {
+                    if (afterRow[field] !== null) {
+                        return `DELETE must clear ${field} on row id ${request.targetRowId}.`;
+                    }
+                }
+                return undefined;
+            }
             if (request.targetField) {
                 if (afterRow[request.targetField] !== null) {
                     return `DELETE must null ${request.targetField} on row id ${request.targetRowId}.`;

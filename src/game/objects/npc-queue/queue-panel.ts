@@ -75,6 +75,10 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         });
     }
 
+    getCardBounds(npcId: string): Phaser.Geom.Rectangle | undefined {
+        return this.cardByNpcId.get(npcId)?.getBounds();
+    }
+
     private buildCard(
         entry: QueueEntry,
         cardX: number,

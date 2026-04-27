@@ -90,6 +90,7 @@ export class TableViewModal {
     /** POST: row indices >= baseRowCount that are included in Save (default on for new rows). */
     private selectedPostNewRows = new Set<number>();
     private selectedGetTargets = new Set<string>();
+    private getTargetObjects = new Map<string, Phaser.GameObjects.Text>();
     private rowEditorVisible = false;
     private rowEditorRowIndex?: number;
     private rowEditorDraft: RowData = {};
@@ -125,6 +126,7 @@ export class TableViewModal {
             .setVisible(false)
             .setInteractive({ useHandCursor: false })
             .on("pointerdown", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                this.hide();
                 stopPointerEventPropagation(event);
             })
             .on("pointerup", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
@@ -146,6 +148,7 @@ export class TableViewModal {
             .setVisible(false)
             .setInteractive({ useHandCursor: false })
             .on("pointerdown", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                this.closeRowEditor();
                 stopPointerEventPropagation(event);
             })
             .on("pointerup", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
@@ -157,6 +160,17 @@ export class TableViewModal {
         this.background = scene.add.rectangle(0, 0, 760, 360, 0xffffff, 1);
         this.background.setStrokeStyle(3, 0x000000, 1);
         this.background.setOrigin(0.5);
+        this.background
+            .setInteractive({ useHandCursor: false })
+            .on("pointerdown", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                stopPointerEventPropagation(event);
+            })
+            .on("pointerup", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                stopPointerEventPropagation(event);
+            })
+            .on("pointermove", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                stopPointerEventPropagation(event);
+            });
 
         this.titleText = scene.add.text(-350, -158, "", {
             color: "#111",
@@ -287,6 +301,17 @@ export class TableViewModal {
         this.container.setVisible(false);
         const rowEditorBackground = scene.add.rectangle(0, 0, 470, 320, 0xffffff, 1);
         rowEditorBackground.setStrokeStyle(3, 0x000000, 1);
+        rowEditorBackground
+            .setInteractive({ useHandCursor: false })
+            .on("pointerdown", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                stopPointerEventPropagation(event);
+            })
+            .on("pointerup", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                stopPointerEventPropagation(event);
+            })
+            .on("pointermove", (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+                stopPointerEventPropagation(event);
+            });
         this.rowEditorTitle = scene.add.text(-220, -140, "", {
             color: "#111",
             fontSize: "20px",
@@ -359,6 +384,7 @@ export class TableViewModal {
         this.baseRowCount = rows.length;
         this.selectedPostNewRows.clear();
         this.selectedGetTargets.clear();
+        this.getTargetObjects.clear();
         this.rowEditorVisible = false;
         this.rowEditorRowIndex = undefined;
         this.rowEditorColumns = [];
@@ -383,6 +409,7 @@ export class TableViewModal {
         this.baseRowCount = 0;
         this.selectedPostNewRows.clear();
         this.selectedGetTargets.clear();
+        this.getTargetObjects.clear();
         this.closeRowEditor();
         this.canEditCurrentTable = true;
         this.currentPageIndex = 0;
@@ -414,6 +441,24 @@ export class TableViewModal {
             return true;
         }
         return false;
+    }
+
+    getSaveButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        if (!this.container.visible || !this.saveButton.visible) {
+            return undefined;
+        }
+        return this.saveButton.getBounds();
+    }
+
+    getGetTargetBounds(target: string): Phaser.Geom.Rectangle | undefined {
+        if (!this.container.visible) {
+            return undefined;
+        }
+        return this.getTargetObjects.get(target)?.getBounds();
+    }
+
+    hasGetTargetSelected(target: string): boolean {
+        return this.selectedGetTargets.has(target);
     }
 
     private buildTableText(rows: RowData[]): string {
@@ -877,6 +922,7 @@ export class TableViewModal {
         }
         this.editorObjects.length = 0;
         this.editorContainer.removeAll(true);
+        this.getTargetObjects.clear();
     }
 
     private onKeydown(event: KeyboardEvent) {
@@ -988,6 +1034,7 @@ export class TableViewModal {
             rowText.on("pointerdown", () => this.toggleGetTarget(rowTarget));
             this.editorContainer.add(rowText);
             this.editorObjects.push(rowText);
+            this.getTargetObjects.set(rowTarget, rowText);
             y += 24;
 
             for (const column of columns) {
@@ -1018,6 +1065,7 @@ export class TableViewModal {
                 fieldText.on("pointerdown", () => this.toggleGetTarget(fieldTarget));
                 this.editorContainer.add(fieldText);
                 this.editorObjects.push(fieldText);
+                this.getTargetObjects.set(fieldTarget, fieldText);
                 y += 20;
             }
             y += 10;
@@ -1050,7 +1098,7 @@ export class TableViewModal {
     }
 
     private isReadonlyColumn(column: string): boolean {
-        return column.toLowerCase().endsWith("id");
+        return column === "id";
     }
 
     private coerceValue(
@@ -1420,7 +1468,7 @@ export class TableViewModal {
     private buildSoftDeletedRow(row: RowData): RowData {
         const nextRow: RowData = {};
         for (const [column, value] of Object.entries(row)) {
-            if (column.toLowerCase().endsWith("id")) {
+            if (this.isReadonlyColumn(column)) {
                 nextRow[column] = value;
             } else {
                 nextRow[column] = null;

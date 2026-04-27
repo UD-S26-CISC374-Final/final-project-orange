@@ -6,8 +6,17 @@ const MODAL_H = 200;
 const BASE_DEPTH = 500;
 const QUEUE_SECTION_H = 192;
 
+type PointerEventDataWithStopPropagation = Phaser.Types.Input.EventData & {
+    stopPropagation: () => void;
+};
+
+function stopPointerEventPropagation(event: Phaser.Types.Input.EventData): void {
+    const pointerEvent = event as PointerEventDataWithStopPropagation;
+    pointerEvent.stopPropagation();
+}
+
 export class NPCDialogueModal {
-    private readonly scene: Phaser.Scene;
+    private readonly outsideClickBlocker: Phaser.GameObjects.Rectangle;
     private readonly container: Phaser.GameObjects.Container;
     private readonly background: Phaser.GameObjects.Rectangle;
     private readonly nameText: Phaser.GameObjects.Text;
@@ -15,13 +24,50 @@ export class NPCDialogueModal {
     private readonly closeButton: Phaser.GameObjects.Text;
 
     constructor(scene: Phaser.Scene) {
-        this.scene = scene;
+        this.outsideClickBlocker = scene.add
+            .rectangle(
+                scene.scale.width / 2,
+                scene.scale.height / 2,
+                scene.scale.width,
+                scene.scale.height,
+                0x000000,
+                0,
+            )
+            .setDepth(BASE_DEPTH - 1)
+            .setVisible(false)
+            .setInteractive({ useHandCursor: false });
+        this.outsideClickBlocker.on(
+            "pointerdown",
+            (
+                _pointer: Phaser.Input.Pointer,
+                _x: number,
+                _y: number,
+                event: Phaser.Types.Input.EventData,
+            ) => {
+                this.hide();
+                stopPointerEventPropagation(event);
+            },
+        );
 
         this.background = scene.add.rectangle(
             0, 0, MODAL_W, MODAL_H,
             0xfafafa, 1,
         ).setOrigin(0, 0);
         this.background.setStrokeStyle(2, 0x333333, 1);
+        this.background
+            .setInteractive({ useHandCursor: false })
+            .on(
+                "pointerdown",
+                (
+                    _pointer: Phaser.Input.Pointer,
+                    _x: number,
+                    _y: number,
+                    event: Phaser.Types.Input.EventData,
+                ) => {
+                    stopPointerEventPropagation(event);
+                    this.bringToTop();
+                },
+            );
 
         this.nameText = scene.add.text(14, 12, "", {
             color: "#111",
@@ -63,27 +109,28 @@ export class NPCDialogueModal {
         this.container.setPosition(10, scene.scale.height - QUEUE_SECTION_H - MODAL_H - 8);
         this.container.setDepth(BASE_DEPTH);
         this.container.setVisible(false);
-
-        this.background.setInteractive();
-        this.background.on("pointerdown", () => this.bringToTop());
     }
 
     bringToTop() {
         this.container.setDepth(1000);
+        this.outsideClickBlocker.setDepth(999);
     }
 
     lowerDepth() {
         this.container.setDepth(BASE_DEPTH);
+        this.outsideClickBlocker.setDepth(BASE_DEPTH - 1);
     }
 
     show(entry: QueueEntry) {
         this.nameText.setText(entry.npc.name);
         this.dialogueText.setText(`"${entry.question.dialogue}"`);
+        this.outsideClickBlocker.setVisible(true);
         this.container.setVisible(true);
         this.bringToTop();
     }
 
     hide() {
+        this.outsideClickBlocker.setVisible(false);
         this.container.setVisible(false);
     }
 
