@@ -42,7 +42,9 @@ export class QueueManager {
     private maxUnlockedDifficulty: Difficulty = 1;
     private bossCount = 0;
     private fixedRequests?: FixedLevelRequest[];
-    private fixedCursor = 0;
+    private fixedRemainingRequests: FixedLevelRequest[] = [];
+    private fixedCompletedCount = 0;
+    private fixedTotalCount = 0;
     private fixedDifficulty: Difficulty = 1;
 
     constructor(store: ERStore) {
@@ -57,8 +59,10 @@ export class QueueManager {
         requests: FixedLevelRequest[],
         difficulty: Difficulty,
     ): void {
-        this.fixedRequests = [...requests];
-        this.fixedCursor = 0;
+        this.fixedRequests = this.shuffleFixedRequests(requests);
+        this.fixedRemainingRequests = [...this.fixedRequests];
+        this.fixedCompletedCount = 0;
+        this.fixedTotalCount = this.fixedRequests.length;
         this.fixedDifficulty = difficulty;
         this.activeQueue = [];
         this.inQueue.clear();
@@ -67,7 +71,9 @@ export class QueueManager {
 
     startEndlessMode(): void {
         this.fixedRequests = undefined;
-        this.fixedCursor = 0;
+        this.fixedRemainingRequests = [];
+        this.fixedCompletedCount = 0;
+        this.fixedTotalCount = 0;
         this.maxUnlockedDifficulty = 3;
         this.activeQueue = [];
         this.inQueue.clear();
@@ -81,7 +87,7 @@ export class QueueManager {
     isFixedLevelComplete(): boolean {
         return Boolean(
             this.fixedRequests &&
-                this.fixedCursor >= this.fixedRequests.length &&
+                this.fixedRemainingRequests.length === 0 &&
                 this.activeQueue.length === 0,
         );
     }
@@ -91,8 +97,8 @@ export class QueueManager {
             return { completed: 0, total: 0 };
         }
         return {
-            completed: Math.max(0, this.fixedCursor - this.activeQueue.length),
-            total: this.fixedRequests.length,
+            completed: this.fixedCompletedCount,
+            total: this.fixedTotalCount,
         };
     }
 
@@ -159,6 +165,7 @@ export class QueueManager {
     }
 
     completeNpcEntry(entry: QueueEntry): void {
+        const previousQueueLength = this.activeQueue.length;
         if (entry.requestId) {
             this.activeQueue = this.activeQueue.filter(
                 (e) => e.requestId !== entry.requestId,
@@ -166,6 +173,16 @@ export class QueueManager {
         } else {
             this.activeQueue = this.activeQueue.filter(
                 (e) => e.npc.id !== entry.npc.id,
+            );
+        }
+        if (
+            this.fixedRequests &&
+            entry.requestId &&
+            this.activeQueue.length < previousQueueLength
+        ) {
+            this.fixedCompletedCount = Math.min(
+                this.fixedTotalCount,
+                this.fixedCompletedCount + 1,
             );
         }
         this.inQueue.delete(entry.npc.id);
@@ -238,12 +255,27 @@ export class QueueManager {
         }
         while (
             this.activeQueue.length < QUEUE_SIZE &&
-            this.fixedCursor < this.fixedRequests.length
+            this.fixedRemainingRequests.length > 0
         ) {
-            const request = this.fixedRequests[this.fixedCursor];
+            const requestIndex = this.fixedRemainingRequests.findIndex(
+                (request) =>
+                    this.store.users.has(request.npcId) &&
+                    !this.inQueue.has(request.npcId),
+            );
+            if (requestIndex < 0) {
+                const invalidIndex = this.fixedRemainingRequests.findIndex(
+                    (request) => !this.store.users.has(request.npcId),
+                );
+                if (invalidIndex >= 0) {
+                    this.fixedRemainingRequests.splice(invalidIndex, 1);
+                    this.fixedTotalCount = Math.max(0, this.fixedTotalCount - 1);
+                    continue;
+                }
+                break;
+            }
+            const [request] = this.fixedRemainingRequests.splice(requestIndex, 1);
             const npc = this.store.users.get(request.npcId);
             if (!npc) {
-                this.fixedCursor += 1;
                 continue;
             }
             const question: Question = {
@@ -258,7 +290,17 @@ export class QueueManager {
                 requestId: request.id,
             });
             this.inQueue.add(npc.id);
-            this.fixedCursor += 1;
         }
+    }
+
+    private shuffleFixedRequests(
+        requests: FixedLevelRequest[],
+    ): FixedLevelRequest[] {
+        const shuffled = [...requests];
+        for (let i = shuffled.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled;
     }
 }

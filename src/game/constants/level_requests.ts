@@ -32,6 +32,7 @@ export type FixedLevelRequest = {
 export type LevelDefinition = {
     id: LevelId;
     title: string;
+    intro: string;
     mode: LevelMode;
     unlockedTables: EntityType[];
     requests: FixedLevelRequest[];
@@ -50,6 +51,8 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
     {
         id: "tutorial",
         title: "Tutorial",
+        intro:
+            "Next feature: GET. Use it when a customer only needs existing data returned from a table.",
         mode: "tutorial",
         unlockedTables: ["USER"],
         requests: [
@@ -73,6 +76,8 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
     {
         id: "level-1",
         title: "Level 1",
+        intro:
+            "Next feature: focused GET practice. Return exact fields from USER rows before changing any stored data.",
         mode: "fixed",
         unlockedTables: ["USER"],
         requests: [
@@ -119,7 +124,46 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 },
             },
             {
-                id: "level-1-post-user-eve",
+                id: "level-1-get-user-name",
+                npcId: "u4",
+                dialogue: 'GET USER: fetch row id u4, field "name"',
+                naturalDialogue:
+                    'Can you pull the USER name field for row u4?',
+                objective: {
+                    method: "GET",
+                    targetType: "USER",
+                    targetRowId: "u4",
+                    targetField: "name",
+                    description: 'GET USER: fetch row id u4, field "name"',
+                },
+            },
+        ],
+    },
+    {
+        id: "level-2",
+        title: "Level 2",
+        intro:
+            "Next feature: POST. Use it when someone asks you to create a brand-new row, then confirm it like any other request.",
+        mode: "fixed",
+        unlockedTables: ["USER"],
+        requests: [
+            {
+                id: "level-2-get-user-money",
+                npcId: "u3",
+                dialogue: 'GET USER: fetch row id u3, field "money"',
+                naturalDialogue:
+                    'Please look up my USER money value and send that field back.',
+                objective: {
+                    method: "GET",
+                    targetType: "USER",
+                    targetRowId: "u3",
+                    targetField: "money",
+                    description:
+                        'GET USER: fetch row id u3, field "money"',
+                },
+            },
+            {
+                id: "level-2-post-user-eve",
                 npcId: "u4",
                 dialogue:
                     "POST USER: add row u5 with name Eve, age 25, feeling curious, money 700",
@@ -138,77 +182,19 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                     },
                 },
             },
-        ],
-    },
-    {
-        id: "level-2",
-        title: "Level 2",
-        mode: "fixed",
-        unlockedTables: ["USER"],
-        requests: [
             {
-                id: "level-2-get-user-name",
-                npcId: "u4",
-                dialogue: 'GET USER: fetch row id u4, field "name"',
+                id: "level-2-get-user-feeling",
+                npcId: "u2",
+                dialogue: 'GET USER: fetch row id u2, field "feeling"',
                 naturalDialogue:
-                    'Can you pull the USER name field for row u4?',
+                    'Can you check my current USER feeling and return that field?',
                 objective: {
                     method: "GET",
-                    targetType: "USER",
-                    targetRowId: "u4",
-                    targetField: "name",
-                    description: 'GET USER: fetch row id u4, field "name"',
-                },
-            },
-            {
-                id: "level-2-put-user-feeling",
-                npcId: "u2",
-                dialogue:
-                    'PUT USER: change row id u2, field "feeling" to confident',
-                naturalDialogue:
-                    'Please update my USER feeling to confident.',
-                objective: {
-                    method: "PUT",
                     targetType: "USER",
                     targetRowId: "u2",
                     targetField: "feeling",
                     description:
-                        'PUT USER: change row id u2, column "feeling" to confident',
-                    expectedUpdateFields: {
-                        feeling: "confident",
-                    },
-                },
-            },
-            {
-                id: "level-2-put-user-money",
-                npcId: "u3",
-                dialogue: 'PUT USER: change row id u3, field "money" to 3500',
-                naturalDialogue: "Please set my USER money value to 3500.",
-                objective: {
-                    method: "PUT",
-                    targetType: "USER",
-                    targetRowId: "u3",
-                    targetField: "money",
-                    description:
-                        'PUT USER: change row id u3, column "money" to 3500',
-                    expectedUpdateFields: {
-                        money: 3500,
-                    },
-                },
-            },
-            {
-                id: "level-2-delete-user-feeling",
-                npcId: "u4",
-                dialogue: 'DELETE USER: clear row id u4, field "feeling"',
-                naturalDialogue:
-                    'Please clear the feeling value from my USER row.',
-                objective: {
-                    method: "DELETE",
-                    targetType: "USER",
-                    targetRowId: "u4",
-                    targetField: "feeling",
-                    description: 'DELETE USER: clear row id u4, field "feeling"',
-                    expectedDeleteFields: ["feeling"],
+                        'GET USER: fetch row id u2, field "feeling"',
                 },
             },
             {
@@ -236,6 +222,8 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
     {
         id: "level-3",
         title: "Level 3",
+        intro:
+            "Next feature: PUT. Use it when a row already exists and one of its saved values needs to change.",
         mode: "fixed",
         unlockedTables: ["USER", "PET", "HOUSE"],
         requests: [
@@ -254,17 +242,23 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 },
             },
             {
-                id: "level-3-get-house-color",
+                id: "level-3-post-pet-pixel",
                 npcId: "u2",
-                dialogue: 'GET HOUSE: fetch row id h1, field "color"',
+                dialogue:
+                    "POST PET: add row p2 with species cat, name Pixel, age 2, ownerId u2",
                 naturalDialogue:
-                    'Please check the HOUSE color value for row h1.',
+                    "Please create PET p2 for owner u2: a cat named Pixel, age 2.",
                 objective: {
-                    method: "GET",
-                    targetType: "HOUSE",
-                    targetRowId: "h1",
-                    targetField: "color",
-                    description: 'GET HOUSE: fetch row id h1, field "color"',
+                    method: "POST",
+                    targetType: "PET",
+                    description: "POST PET: add a new row for id p2",
+                    expectedInsertFields: {
+                        id: "p2",
+                        species: "cat",
+                        name: "Pixel",
+                        age: 2,
+                        ownerId: "u2",
+                    },
                 },
             },
             {
@@ -304,37 +298,17 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 },
             },
             {
-                id: "level-3-delete-pet-age",
+                id: "level-3-get-house-color",
                 npcId: "u1",
-                dialogue: 'DELETE PET: clear row id p1, field "age"',
-                naturalDialogue: "Please clear the age value from PET p1.",
-                objective: {
-                    method: "DELETE",
-                    targetType: "PET",
-                    targetRowId: "p1",
-                    targetField: "age",
-                    description: 'DELETE PET: clear row id p1, field "age"',
-                    expectedDeleteFields: ["age"],
-                },
-            },
-            {
-                id: "level-3-post-pet-pixel",
-                npcId: "u2",
-                dialogue:
-                    "POST PET: add row p2 with species cat, name Pixel, age 2, ownerId u2",
+                dialogue: 'GET HOUSE: fetch row id h1, field "color"',
                 naturalDialogue:
-                    "Please create PET p2 for owner u2: a cat named Pixel, age 2.",
+                    'Please check the HOUSE color value for row h1.',
                 objective: {
-                    method: "POST",
-                    targetType: "PET",
-                    description: "POST PET: add a new row for id p2",
-                    expectedInsertFields: {
-                        id: "p2",
-                        species: "cat",
-                        name: "Pixel",
-                        age: 2,
-                        ownerId: "u2",
-                    },
+                    method: "GET",
+                    targetType: "HOUSE",
+                    targetRowId: "h1",
+                    targetField: "color",
+                    description: 'GET HOUSE: fetch row id h1, field "color"',
                 },
             },
         ],
@@ -342,6 +316,8 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
     {
         id: "level-4",
         title: "Level 4",
+        intro:
+            "Next feature: DELETE. Use it when a saved value should be cleared because the system no longer knows it.",
         mode: "fixed",
         unlockedTables: ["USER", "PET", "HOUSE"],
         requests: [
@@ -449,6 +425,8 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
     {
         id: "level-5",
         title: "Level 5",
+        intro:
+            "Next feature: relationship work. JOB and EMPLOYMENT requests mix reads and mutations across linked tables.",
         mode: "fixed",
         unlockedTables: ["USER", "PET", "HOUSE", "JOB", "EMPLOYMENT"],
         requests: [
@@ -556,6 +534,8 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
     {
         id: "level-6",
         title: "Level 6",
+        intro:
+            "Next feature: full workflow. VEHICLE joins the schema, so choose GET, POST, PUT, or DELETE by intent.",
         mode: "fixed",
         unlockedTables: ["USER", "PET", "HOUSE", "JOB", "EMPLOYMENT", "VEHICLE"],
         requests: [

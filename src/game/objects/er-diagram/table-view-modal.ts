@@ -209,7 +209,29 @@ export class TableViewModal {
                 padding: { left: 8, right: 8, top: 4, bottom: 4 },
             })
             .setInteractive({ useHandCursor: true });
-        this.saveButton.on("pointerdown", () => this.onSavePressed());
+        this.saveButton.on(
+            "pointerdown",
+            (
+                _pointer: Phaser.Input.Pointer,
+                _x: number,
+                _y: number,
+                event: Phaser.Types.Input.EventData,
+            ) => {
+                stopPointerEventPropagation(event);
+            },
+        );
+        this.saveButton.on(
+            "pointerup",
+            (
+                _pointer: Phaser.Input.Pointer,
+                _x: number,
+                _y: number,
+                event: Phaser.Types.Input.EventData,
+            ) => {
+                this.onSavePressed();
+                stopPointerEventPropagation(event);
+            },
+        );
         this.saveButton.setVisible(false);
 
         this.addRowButton = scene.add
@@ -332,7 +354,29 @@ export class TableViewModal {
                 padding: { left: 8, right: 8, top: 4, bottom: 4 },
             })
             .setInteractive({ useHandCursor: true });
-        this.rowEditorSaveButton.on("pointerup", () => this.saveRowEditor());
+        this.rowEditorSaveButton.on(
+            "pointerdown",
+            (
+                _pointer: Phaser.Input.Pointer,
+                _x: number,
+                _y: number,
+                event: Phaser.Types.Input.EventData,
+            ) => {
+                stopPointerEventPropagation(event);
+            },
+        );
+        this.rowEditorSaveButton.on(
+            "pointerup",
+            (
+                _pointer: Phaser.Input.Pointer,
+                _x: number,
+                _y: number,
+                event: Phaser.Types.Input.EventData,
+            ) => {
+                this.saveRowEditor();
+                stopPointerEventPropagation(event);
+            },
+        );
         this.rowEditorCancelButton = scene.add
             .text(184, -140, "X", {
                 color: "#ffffff",

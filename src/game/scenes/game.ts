@@ -14,6 +14,10 @@ import { QueuePanel } from "../objects/npc-queue/queue-panel";
 import { NPCDialogueModal } from "../objects/npc-queue/npc-dialogue-modal";
 import { PendingRequestsPanel } from "../objects/pending-requests-panel";
 import {
+    DevLevelShortcut,
+    isDevLevelIndex,
+} from "../helpers/dev-level-shortcut";
+import {
     ENDLESS_MODE_DEFINITION,
     LEVEL_DEFINITIONS,
     type LevelDefinition,
@@ -37,6 +41,11 @@ const ALL_TABLES: EntityType[] = [
     "VEHICLE",
 ];
 const TUTORIAL_GET_TARGET = "field:u1:name";
+
+type MainGameStartData = {
+    startInEndlessMode?: boolean;
+    startLevelIndex?: number;
+};
 
 export class MainGame extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -82,6 +91,9 @@ export class MainGame extends Scene {
     private startCountdownTimer?: Phaser.Time.TimerEvent;
     private startCountdownOverlay?: Phaser.GameObjects.Rectangle;
     private startCountdownText?: Phaser.GameObjects.Text;
+    private startCountdownIntroText?: Phaser.GameObjects.Text;
+    private levelIntroToast?: Phaser.GameObjects.Container;
+    private levelIntroToastTimer?: Phaser.Time.TimerEvent;
     private currentLevelIndex = 0;
     private currentLevel?: LevelDefinition;
     private endlessModeActive = false;
@@ -92,6 +104,7 @@ export class MainGame extends Scene {
     private availableRequestMethods = new Set<ApiRequestMethod>(["GET"]);
     private levelOverlayObjects: Phaser.GameObjects.GameObject[] = [];
     private startInEndlessMode = false;
+    private startLevelIndex?: number;
     private activeRequestEntry?: QueueEntry;
     private activeRequestContainer?: Phaser.GameObjects.Container;
     private activeRequestBackground?: Phaser.GameObjects.Rectangle;
@@ -102,12 +115,20 @@ export class MainGame extends Scene {
         super("MainGame");
     }
 
-    init(data?: { startInEndlessMode?: boolean }) {
+    init(data?: MainGameStartData) {
+        const requestedLevelIndex = data?.startLevelIndex;
         this.startInEndlessMode = data?.startInEndlessMode === true;
+        this.startLevelIndex =
+            isDevLevelIndex(requestedLevelIndex) ? requestedLevelIndex : (
+                undefined
+            );
     }
 
     create() {
         this.resetRuntimeState();
+        new DevLevelShortcut(this, (levelIndex) =>
+            this.startDevLevel(levelIndex),
+        );
         const grid = new DataLoader(this);
         grid.buildGrid(this.scale.width, this.scale.height);
         grid.loadGameComponents(this);
@@ -181,6 +202,7 @@ export class MainGame extends Scene {
         this.activeRequestEntry = undefined;
         this.tutorialCoachKey = "";
         this.clearEnterHoldTimer();
+        this.clearLevelIntroToast();
     }
 
     private configureInitialMode() {
@@ -188,7 +210,18 @@ export class MainGame extends Scene {
             this.activateEndlessMode(false);
             return;
         }
+        if (this.startLevelIndex !== undefined) {
+            this.activateLevel(this.startLevelIndex, false);
+            return;
+        }
         this.activateLevel(0, false);
+    }
+
+    private startDevLevel(levelIndex: number) {
+        if (!isDevLevelIndex(levelIndex)) {
+            return;
+        }
+        this.scene.start("MainGame", { startLevelIndex: levelIndex });
     }
 
     private activateLevel(levelIndex: number, startCountdown: boolean) {
@@ -322,7 +355,9 @@ export class MainGame extends Scene {
             const firstEntry = this.queueManager?.getQueue()[0];
             this.setTutorialCoach(
                 "First, talk to Alice. Click her NPC card so you can read what she needs.",
-                firstEntry ? this.queuePanel?.getCardBounds(firstEntry.npc.id) : undefined,
+                firstEntry ?
+                    this.queuePanel?.getCardBounds(firstEntry.npc.id)
+                :   undefined,
                 "click-npc",
             );
             return;
@@ -761,7 +796,10 @@ export class MainGame extends Scene {
         if (!this.gameActive || this.gameOverTriggered) {
             return;
         }
-        if (this.currentLevel?.mode === "tutorial" && !this.activeRequestEntry) {
+        if (
+            this.currentLevel?.mode === "tutorial" &&
+            !this.activeRequestEntry
+        ) {
             this.flashFailureOverlay();
             this.refreshTutorialCoach();
             return;
@@ -841,7 +879,9 @@ export class MainGame extends Scene {
             }
             this.queuePanel!.flashNpcSuccess(
                 npcId,
-                this.successStatusCodeForMethod(entry.question.objective.method),
+                this.successStatusCodeForMethod(
+                    entry.question.objective.method,
+                ),
                 () => {
                     if (this.gameOverTriggered) {
                         onSuccessComplete();
@@ -904,14 +944,19 @@ export class MainGame extends Scene {
             .setScrollFactor(0);
 
         this.bossSuccessText = this.add
-            .text(this.scale.width / 2, this.scale.height / 2, "BOSS DEFEATED!\n+Time Refill", {
-                color: "#ffffff",
-                fontSize: "48px",
-                fontStyle: "bold",
-                stroke: "#aa5500",
-                strokeThickness: 8,
-                align: "center",
-            })
+            .text(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                "BOSS DEFEATED!\n+Time Refill",
+                {
+                    color: "#ffffff",
+                    fontSize: "48px",
+                    fontStyle: "bold",
+                    stroke: "#aa5500",
+                    strokeThickness: 8,
+                    align: "center",
+                },
+            )
             .setOrigin(0.5)
             .setDepth(2001)
             .setVisible(false)
@@ -1133,7 +1178,10 @@ export class MainGame extends Scene {
             return;
         }
         const queue = this.queueManager.getQueue();
-        if (this.currentLevel?.mode === "tutorial" && !this.activeRequestEntry) {
+        if (
+            this.currentLevel?.mode === "tutorial" &&
+            !this.activeRequestEntry
+        ) {
             this.setActiveRequest(undefined);
             return;
         }
@@ -1284,7 +1332,10 @@ export class MainGame extends Scene {
             .setVisible(true)
             .setAlpha(0.95)
             .setY(fromGeometry.y)
-            .setDisplaySize(TIMEOUT_BAR_WIDTH + 4, Math.max(2, fromGeometry.height));
+            .setDisplaySize(
+                TIMEOUT_BAR_WIDTH + 4,
+                Math.max(2, fromGeometry.height),
+            );
         this.tweens.add({
             targets: preview,
             y: toGeometry.y,
@@ -1326,6 +1377,9 @@ export class MainGame extends Scene {
             return;
         }
         this.methodHotkeyHandler = (event: KeyboardEvent) => {
+            if (event.defaultPrevented) {
+                return;
+            }
             if (!this.gameActive || this.gameOverTriggered) {
                 return;
             }
@@ -1333,6 +1387,9 @@ export class MainGame extends Scene {
                 if (this.closeTopModalIfOpen()) {
                     event.preventDefault();
                 }
+                return;
+            }
+            if (this.hasOpenModal()) {
                 return;
             }
             if (this.isEnterKey(event)) {
@@ -1385,6 +1442,7 @@ export class MainGame extends Scene {
                 this.startCountdownTimer = undefined;
             }
             this.clearStartCountdownOverlay();
+            this.clearLevelIntroToast();
             if (!this.input.keyboard) {
                 return;
             }
@@ -1392,7 +1450,10 @@ export class MainGame extends Scene {
                 this.input.keyboard.off("keydown", this.methodHotkeyHandler);
             }
             if (this.methodHotkeyReleaseHandler) {
-                this.input.keyboard.off("keyup", this.methodHotkeyReleaseHandler);
+                this.input.keyboard.off(
+                    "keyup",
+                    this.methodHotkeyReleaseHandler,
+                );
             }
             this.methodHotkeyHandler = undefined;
             this.methodHotkeyReleaseHandler = undefined;
@@ -1406,6 +1467,7 @@ export class MainGame extends Scene {
             this.input.enabled = true;
             this.updateConfirmButtonState();
             this.refreshLevelHud();
+            this.showLevelIntroToast();
             this.refreshTutorialCoach();
             return;
         }
@@ -1427,8 +1489,31 @@ export class MainGame extends Scene {
             .setDepth(2500)
             .setScrollFactor(0);
 
+        if (this.currentLevel?.intro) {
+            this.startCountdownIntroText = this.add
+                .text(
+                    this.scale.width / 2,
+                    this.scale.height / 2 - 134,
+                    `${this.currentLevel.title}\n${this.currentLevel.intro}`,
+                    {
+                        color: "#ffffff",
+                        fontSize: "21px",
+                        fontStyle: "bold",
+                        stroke: "#111111",
+                        strokeThickness: 5,
+                        align: "center",
+                        wordWrap: {
+                            width: Math.min(760, this.scale.width - 48),
+                        },
+                    },
+                )
+                .setOrigin(0.5)
+                .setDepth(2501)
+                .setScrollFactor(0);
+        }
+
         this.startCountdownText = this.add
-            .text(this.scale.width / 2, this.scale.height / 2, "", {
+            .text(this.scale.width / 2, this.scale.height / 2 + 56, "", {
                 color: "#ffffff",
                 fontSize: "140px",
                 fontStyle: "bold",
@@ -1491,12 +1576,63 @@ export class MainGame extends Scene {
         });
     }
 
+    private showLevelIntroToast() {
+        const level = this.currentLevel;
+        if (!level?.intro) {
+            return;
+        }
+        this.clearLevelIntroToast();
+
+        const toastWidth = Math.min(760, this.scale.width - 48);
+        const text = this.add
+            .text(0, 0, `${level.title}\n${level.intro}`, {
+                color: "#ffffff",
+                fontSize: "17px",
+                fontStyle: "bold",
+                align: "center",
+                wordWrap: { width: toastWidth - 28 },
+            })
+            .setOrigin(0.5);
+        const toastHeight = Math.max(72, text.height + 24);
+        const background = this.add
+            .rectangle(0, 0, toastWidth, toastHeight, 0x111111, 0.88)
+            .setStrokeStyle(2, 0xffffff, 0.8);
+        this.levelIntroToast = this.add
+            .container(this.scale.width / 2, 108, [background, text])
+            .setDepth(3004)
+            .setScrollFactor(0);
+        this.levelIntroToastTimer = this.time.delayedCall(4200, () => {
+            if (!this.levelIntroToast) {
+                return;
+            }
+            this.tweens.add({
+                targets: this.levelIntroToast,
+                alpha: 0,
+                duration: 280,
+                ease: "Quad.easeOut",
+                onComplete: () => this.clearLevelIntroToast(),
+            });
+        });
+    }
+
+    private clearLevelIntroToast() {
+        this.levelIntroToastTimer?.remove(false);
+        this.levelIntroToastTimer = undefined;
+        this.levelIntroToast?.destroy();
+        this.levelIntroToast = undefined;
+    }
+
     private clearStartCountdownOverlay() {
         if (this.startCountdownText) {
             this.tweens.killTweensOf(this.startCountdownText);
         }
+        if (this.startCountdownIntroText) {
+            this.tweens.killTweensOf(this.startCountdownIntroText);
+        }
         this.startCountdownText?.destroy();
         this.startCountdownText = undefined;
+        this.startCountdownIntroText?.destroy();
+        this.startCountdownIntroText = undefined;
         this.startCountdownOverlay?.destroy();
         this.startCountdownOverlay = undefined;
     }
@@ -1515,7 +1651,8 @@ export class MainGame extends Scene {
 
     private hasOpenModal(): boolean {
         return Boolean(
-            this.dialogueModal?.isVisible() || this.erDiagram?.hasOpenModalLayer(),
+            this.dialogueModal?.isVisible() ||
+            this.erDiagram?.hasOpenModalLayer(),
         );
     }
 
