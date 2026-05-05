@@ -166,7 +166,7 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 id: "level-2-post-user-eve",
                 npcId: "u4",
                 dialogue:
-                    "POST USER: add row u5 with name Eve, age 25, feeling curious, money 700",
+                    "POST USER: add new row in user table with the name Eve, age 25, feeling curious, money 700",
                 naturalDialogue:
                     "Please create a new USER row for Eve with age 25, feeling curious, and money 700.",
                 objective: {
@@ -174,7 +174,6 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                     targetType: "USER",
                     description: "POST USER: add a new row for id u5",
                     expectedInsertFields: {
-                        id: "u5",
                         name: "Eve",
                         age: 25,
                         feeling: "curious",
@@ -201,7 +200,7 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 id: "level-2-post-user-frank",
                 npcId: "u1",
                 dialogue:
-                    "POST USER: add row u6 with name Frank, age 31, feeling focused, money 1200",
+                    "POST USER: add new row in user table with the name Frank, age 31, feeling focused, money 1200",
                 naturalDialogue:
                     "Please create a new USER row for Frank with age 31, feeling focused, and money 1200.",
                 objective: {
@@ -209,7 +208,6 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                     targetType: "USER",
                     description: "POST USER: add a new row for id u6",
                     expectedInsertFields: {
-                        id: "u6",
                         name: "Frank",
                         age: 31,
                         feeling: "focused",
@@ -251,9 +249,8 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 objective: {
                     method: "POST",
                     targetType: "PET",
-                    description: "POST PET: add a new row for id p2",
+                    description: "POST PET: add a new row in pet table",
                     expectedInsertFields: {
-                        id: "p2",
                         species: "cat",
                         name: "Pixel",
                         age: 2,
@@ -405,15 +402,14 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 id: "level-4-post-house-h2",
                 npcId: "u2",
                 dialogue:
-                    "Bob has a green house worth 275000. Add it as house h2.",
+                    "Bob has a green house worth 275000.",
                 naturalDialogue:
-                    "Bob has a green house worth 275000. Add it as house h2.",
+                    "Bob has a green house worth 275000.",
                 objective: {
                     method: "POST",
                     targetType: "HOUSE",
-                    description: "POST HOUSE: add a new row for id h2",
+                    description: "POST HOUSE: add a new row in house table",
                     expectedInsertFields: {
-                        id: "h2",
                         ownerId: "u2",
                         color: "green",
                         listingPrice: 275000,
@@ -497,15 +493,14 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 id: "level-5-post-job-analyst",
                 npcId: "u1",
                 dialogue:
-                    "POST JOB: add row j2 with title Analyst, yearlySalary 80000, location Remote",
+                    "POST JOB: add new row to job table with title Analyst, yearlySalary 80000, location Remote",
                 naturalDialogue:
-                    "Please add job j2: Analyst, yearly salary 80000, location Remote.",
+                    "Please add new row to job table: Analyst, yearly salary 80000, location Remote.",
                 objective: {
                     method: "POST",
                     targetType: "JOB",
                     description: "POST JOB: add a new row for id j2",
                     expectedInsertFields: {
-                        id: "j2",
                         title: "Analyst",
                         yearlySalary: 80000,
                         location: "Remote",
@@ -515,15 +510,14 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
             {
                 id: "level-5-post-employment-e2",
                 npcId: "u2",
-                dialogue: "POST EMPLOYMENT: add row e2 with userId u2 and jobId j1",
+                dialogue: "POST EMPLOYMENT: add new row to the employment tablewith userId u2 and jobId j1",
                 naturalDialogue:
                     "Please connect user u2 to job j1 by creating employment row e2.",
                 objective: {
                     method: "POST",
                     targetType: "EMPLOYMENT",
-                    description: "POST EMPLOYMENT: add a new row for id e2",
+                    description: "POST EMPLOYMENT: add a new row to the employment table",
                     expectedInsertFields: {
-                        id: "e2",
                         userId: "u2",
                         jobId: "j1",
                     },
@@ -620,15 +614,14 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                 id: "level-6-post-vehicle-v2",
                 npcId: "u2",
                 dialogue:
-                    "POST VEHICLE: add row v2 with houseId h1, color silver, year 2024, model suv, price 32000",
+                    "POST VEHICLE: add new row to vehicle table with houseId h1, color silver, year 2024, model suv, price 32000",
                 naturalDialogue:
-                    "Please add vehicle v2 to house h1: silver 2024 suv, price 32000.",
+                    "Please add new vehicle to house h1: silver 2024 suv, price 32000.",
                 objective: {
                     method: "POST",
                     targetType: "VEHICLE",
-                    description: "POST VEHICLE: add a new row for id v2",
+                    description: "POST VEHICLE: add a new row to the vehicle table",
                     expectedInsertFields: {
-                        id: "v2",
                         houseId: "h1",
                         color: "silver",
                         year: 2024,
