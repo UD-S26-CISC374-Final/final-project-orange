@@ -89,6 +89,7 @@ export class MainGame extends Scene {
     private bossSuccessText?: Phaser.GameObjects.Text;
     private gameActive = false;
     private startCountdownTimer?: Phaser.Time.TimerEvent;
+    private startCountdownEnterHandler?: (event: KeyboardEvent) => void;
     private startCountdownOverlay?: Phaser.GameObjects.Rectangle;
     private startCountdownText?: Phaser.GameObjects.Text;
     private startCountdownIntroText?: Phaser.GameObjects.Text;
@@ -1475,7 +1476,7 @@ export class MainGame extends Scene {
         this.clearTutorialHint();
         this.gameActive = false;
         this.updateConfirmButtonState();
-        this.input.enabled = false;
+        this.input.enabled = true;
 
         this.startCountdownOverlay = this.add
             .rectangle(
@@ -1487,7 +1488,8 @@ export class MainGame extends Scene {
                 0.35,
             )
             .setDepth(2500)
-            .setScrollFactor(0);
+            .setScrollFactor(0)
+            .setInteractive();
 
         if (this.currentLevel?.intro) {
             this.startCountdownIntroText = this.add
@@ -1515,14 +1517,46 @@ export class MainGame extends Scene {
         this.startCountdownText = this.add
             .text(this.scale.width / 2, this.scale.height / 2 + 56, "", {
                 color: "#ffffff",
-                fontSize: "140px",
+                fontSize: "30px",
                 fontStyle: "bold",
                 stroke: "#111111",
-                strokeThickness: 10,
+                strokeThickness: 6,
+                align: "center",
             })
             .setOrigin(0.5)
             .setDepth(2501)
             .setScrollFactor(0);
+
+        this.showCountdownStartPrompt();
+        this.waitForCountdownStartInput();
+    }
+
+    private waitForCountdownStartInput() {
+        this.clearStartCountdownEnterHandler();
+        if (!this.input.keyboard) {
+            this.beginStartCountdownTicks();
+            return;
+        }
+        this.startCountdownEnterHandler = (event: KeyboardEvent) => {
+            if (
+                event.defaultPrevented ||
+                event.repeat ||
+                !this.isEnterKey(event)
+            ) {
+                return;
+            }
+            event.preventDefault();
+            this.beginStartCountdownTicks();
+        };
+        this.input.keyboard.on("keydown", this.startCountdownEnterHandler);
+    }
+
+    private beginStartCountdownTicks() {
+        if (!this.startCountdownText) {
+            return;
+        }
+        this.clearStartCountdownEnterHandler();
+        this.input.enabled = false;
 
         let secondsRemaining = 3;
         this.showCountdownText(`${secondsRemaining}`, false);
@@ -1537,6 +1571,32 @@ export class MainGame extends Scene {
                 }
                 this.startGameplayPhase();
             },
+        });
+    }
+
+    private showCountdownStartPrompt() {
+        if (!this.startCountdownText) {
+            return;
+        }
+        this.startCountdownText.setText("Press Enter to Start Countdown");
+        this.startCountdownText.setStyle({
+            color: "#ffffff",
+            fontSize: "30px",
+            fontStyle: "bold",
+            stroke: "#111111",
+            strokeThickness: 6,
+            align: "center",
+        });
+        this.startCountdownText.setScale(1);
+        this.startCountdownText.setAlpha(1);
+        this.tweens.killTweensOf(this.startCountdownText);
+        this.tweens.add({
+            targets: this.startCountdownText,
+            alpha: 0.62,
+            duration: 620,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.easeInOut",
         });
     }
 
@@ -1623,6 +1683,11 @@ export class MainGame extends Scene {
     }
 
     private clearStartCountdownOverlay() {
+        this.clearStartCountdownEnterHandler();
+        if (this.startCountdownTimer) {
+            this.startCountdownTimer.remove(false);
+            this.startCountdownTimer = undefined;
+        }
         if (this.startCountdownText) {
             this.tweens.killTweensOf(this.startCountdownText);
         }
@@ -1635,6 +1700,15 @@ export class MainGame extends Scene {
         this.startCountdownIntroText = undefined;
         this.startCountdownOverlay?.destroy();
         this.startCountdownOverlay = undefined;
+    }
+
+    private clearStartCountdownEnterHandler() {
+        if (!this.startCountdownEnterHandler || !this.input.keyboard) {
+            this.startCountdownEnterHandler = undefined;
+            return;
+        }
+        this.input.keyboard.off("keydown", this.startCountdownEnterHandler);
+        this.startCountdownEnterHandler = undefined;
     }
 
     private clearEnterHoldTimer() {

@@ -3,7 +3,7 @@
 ## Functionality
 
 - [x] Level Feature
-- [ ] Optimize Questions for difficulty, new tables, and different request types
+- [x] Optimize Questions for difficulty, new tables, and different request types
 - [ ] Add power-ups and super users
 - [x] Add basic tutorial for first time players
 - [ ] Add increased keyboard functionality for "pro" users

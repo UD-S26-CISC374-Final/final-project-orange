@@ -18,6 +18,41 @@ export function isDevLevelIndex(
     );
 }
 
+function digitFromEvent(key: string, code: string): number | undefined {
+    if (/^[1-9]$/.test(key)) {
+        return Number(key);
+    }
+    if (/^Digit[1-9]$/.test(code)) {
+        return Number(code.slice("Digit".length));
+    }
+    if (/^Numpad[1-9]$/.test(code)) {
+        return Number(code.slice("Numpad".length));
+    }
+    return undefined;
+}
+
+function modifierFromEvent(event: KeyboardEvent): DevModifierKey | undefined {
+    const key = event.key.toLowerCase();
+    if (key === "b" || event.code === "KeyB") {
+        return "b";
+    }
+    if (key === "j" || event.code === "KeyJ") {
+        return "j";
+    }
+    if (key === "p" || event.code === "KeyP") {
+        return "p";
+    }
+    return undefined;
+}
+
+function levelIndexFromEvent(event: KeyboardEvent): number | undefined {
+    const digit = digitFromEvent(event.key, event.code);
+    if (digit === undefined) {
+        return undefined;
+    }
+    return isDevLevelIndex(digit) ? digit : undefined;
+}
+
 export class DevLevelShortcut {
     private readonly scene: Phaser.Scene;
     private readonly onLevelSelected: (levelIndex: number) => void;
@@ -167,39 +202,4 @@ export class DevLevelShortcut {
             this.hasRequiredModifiers() && this.heldLevelIndices.has(levelIndex)
         );
     }
-}
-
-function modifierFromEvent(event: KeyboardEvent): DevModifierKey | undefined {
-    const key = event.key.toLowerCase();
-    if (key === "b" || event.code === "KeyB") {
-        return "b";
-    }
-    if (key === "j" || event.code === "KeyJ") {
-        return "j";
-    }
-    if (key === "p" || event.code === "KeyP") {
-        return "p";
-    }
-    return undefined;
-}
-
-function levelIndexFromEvent(event: KeyboardEvent): number | undefined {
-    const digit = digitFromEvent(event.key, event.code);
-    if (digit === undefined) {
-        return undefined;
-    }
-    return isDevLevelIndex(digit) ? digit : undefined;
-}
-
-function digitFromEvent(key: string, code: string): number | undefined {
-    if (/^[1-9]$/.test(key)) {
-        return Number(key);
-    }
-    if (/^Digit[1-9]$/.test(code)) {
-        return Number(code.slice("Digit".length));
-    }
-    if (/^Numpad[1-9]$/.test(code)) {
-        return Number(code.slice("Numpad".length));
-    }
-    return undefined;
 }
