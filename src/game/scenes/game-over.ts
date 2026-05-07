@@ -1,4 +1,5 @@
 import { EventBus } from "../event-bus";
+import { DevLevelShortcut } from "../helpers/dev-level-shortcut";
 import { Scene } from "phaser";
 
 export class GameOver extends Scene {
@@ -28,6 +29,10 @@ export class GameOver extends Scene {
             })
             .setOrigin(0.5)
             .setDepth(100);
+
+        new DevLevelShortcut(this, (levelIndex) => {
+            this.scene.start("MainGame", { startLevelIndex: levelIndex });
+        });
 
         EventBus.emit("current-scene-ready", this);
     }

@@ -31,7 +31,7 @@ export class Preloader extends Scene {
         this.load.image("star", "star.png");
         this.load.image("phaser-logo", "phaser-logo.png");
 
-        this.load.image("npc", "npc.png");
+        this.load.image("npc", "user.webp");
     }
 
     create() {

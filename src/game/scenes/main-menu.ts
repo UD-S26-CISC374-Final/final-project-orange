@@ -3,6 +3,7 @@ import { GameObjects, Scene } from "phaser";
 import { EventBus } from "../event-bus";
 import type { ChangeableScene } from "../reactable-scene";
 import { DataLoader } from "../helpers/dataloader";
+import { DevLevelShortcut } from "../helpers/dev-level-shortcut";
 
 export class MainMenu extends Scene implements ChangeableScene {
     background: GameObjects.Image;
@@ -60,6 +61,9 @@ export class MainMenu extends Scene implements ChangeableScene {
 
         if (this.input.keyboard) {
             this.enterStartHandler = (event: KeyboardEvent) => {
+                if (event.defaultPrevented) {
+                    return;
+                }
                 if (event.repeat) {
                     return;
                 }
@@ -73,6 +77,9 @@ export class MainMenu extends Scene implements ChangeableScene {
             };
             this.input.keyboard.on("keydown", this.enterStartHandler);
         }
+        new DevLevelShortcut(this, (levelIndex) =>
+            this.startMainGame(levelIndex),
+        );
         this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
             if (this.input.keyboard && this.enterStartHandler) {
                 this.input.keyboard.off("keydown", this.enterStartHandler);
@@ -96,6 +103,10 @@ export class MainMenu extends Scene implements ChangeableScene {
     }
 
     changeScene() {
+        this.startMainGame();
+    }
+
+    private startMainGame(levelIndex?: number) {
         if (this.startTriggered) {
             return;
         }
@@ -105,7 +116,11 @@ export class MainMenu extends Scene implements ChangeableScene {
             this.logoTween = null;
         }
 
-        this.scene.start("MainGame");
+        const data =
+            levelIndex === undefined ? undefined : (
+                { startLevelIndex: levelIndex }
+            );
+        this.scene.start("MainGame", data);
     }
 
     moveSprite(callback: ({ x, y }: { x: number; y: number }) => void) {

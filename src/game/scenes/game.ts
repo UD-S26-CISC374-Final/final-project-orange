@@ -6,20 +6,46 @@ import {
     buildDefaultStore,
     type ApiRequestMethod,
     type ConfirmPendingRequestCandidate,
+    type EntityType,
 } from "../objects/er-diagram/diagram-handler";
 import { METHOD_UI_COLORS } from "../helpers/method-ui-colors";
 import { QueueManager, type QueueEntry } from "../helpers/queue-manager";
 import { QueuePanel } from "../objects/npc-queue/queue-panel";
 import { NPCDialogueModal } from "../objects/npc-queue/npc-dialogue-modal";
 import { PendingRequestsPanel } from "../objects/pending-requests-panel";
+import {
+    DevLevelShortcut,
+    isDevLevelIndex,
+} from "../helpers/dev-level-shortcut";
+import {
+    ENDLESS_MODE_DEFINITION,
+    LEVEL_DEFINITIONS,
+    type LevelDefinition,
+} from "../constants/level_requests";
 
-const TIMEOUT_DRAIN_SECONDS = 90;
+const TIMEOUT_DRAIN_SECONDS = 120;
 const TIMEOUT_REWARD_PER_CORRECT = 0.06;
 const TIMEOUT_PENALTY_PER_INCORRECT = 0.08;
+const TIMEOUT_BOSS_REWARD = 100;
 const TIMEOUT_BAR_HEIGHT = 210;
 const TIMEOUT_BAR_WIDTH = 20;
 const TIMEOUT_BAR_X = 22;
 const TIMEOUT_BAR_Y = 54;
+const BOSS_SCORE_THRESHOLD = 30;
+const ALL_TABLES: EntityType[] = [
+    "USER",
+    "PET",
+    "HOUSE",
+    "JOB",
+    "EMPLOYMENT",
+    "VEHICLE",
+];
+const TUTORIAL_GET_TARGET = "field:u1:name";
+
+type MainGameStartData = {
+    startInEndlessMode?: boolean;
+    startLevelIndex?: number;
+};
 
 export class MainGame extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -29,6 +55,7 @@ export class MainGame extends Scene {
     private dialogueModal?: NPCDialogueModal;
     private pendingRequestsPanel?: PendingRequestsPanel;
     private score = 0;
+    private lastBossSpawnScore = 0;
     private scoreText?: Phaser.GameObjects.Text;
     private completedRequestCount = 0;
     private timeoutNormalized = 1;
@@ -58,17 +85,51 @@ export class MainGame extends Scene {
     private enterKeyDown = false;
     private enterHoldTriggered = false;
     private failureFlashOverlay?: Phaser.GameObjects.Rectangle;
+    private bossSuccessOverlay?: Phaser.GameObjects.Rectangle;
+    private bossSuccessText?: Phaser.GameObjects.Text;
     private gameActive = false;
     private startCountdownTimer?: Phaser.Time.TimerEvent;
+    private startCountdownEnterHandler?: (event: KeyboardEvent) => void;
     private startCountdownOverlay?: Phaser.GameObjects.Rectangle;
     private startCountdownText?: Phaser.GameObjects.Text;
+    private startCountdownIntroText?: Phaser.GameObjects.Text;
+    private levelIntroToast?: Phaser.GameObjects.Container;
+    private levelIntroToastTimer?: Phaser.Time.TimerEvent;
+    private currentLevelIndex = 0;
+    private currentLevel?: LevelDefinition;
+    private endlessModeActive = false;
+    private levelText?: Phaser.GameObjects.Text;
+    private tutorialHintText?: Phaser.GameObjects.Text;
+    private tutorialHighlight?: Phaser.GameObjects.Graphics;
+    private tutorialCoachKey = "";
+    private availableRequestMethods = new Set<ApiRequestMethod>(["GET"]);
+    private levelOverlayObjects: Phaser.GameObjects.GameObject[] = [];
+    private startInEndlessMode = false;
+    private startLevelIndex?: number;
+    private activeRequestEntry?: QueueEntry;
+    private activeRequestContainer?: Phaser.GameObjects.Container;
+    private activeRequestBackground?: Phaser.GameObjects.Rectangle;
+    private activeRequestTitleText?: Phaser.GameObjects.Text;
+    private activeRequestBodyText?: Phaser.GameObjects.Text;
 
     constructor() {
         super("MainGame");
     }
 
+    init(data?: MainGameStartData) {
+        const requestedLevelIndex = data?.startLevelIndex;
+        this.startInEndlessMode = data?.startInEndlessMode === true;
+        this.startLevelIndex =
+            isDevLevelIndex(requestedLevelIndex) ? requestedLevelIndex : (
+                undefined
+            );
+    }
+
     create() {
-        // load the background grid
+        this.resetRuntimeState();
+        new DevLevelShortcut(this, (levelIndex) =>
+            this.startDevLevel(levelIndex),
+        );
         const grid = new DataLoader(this);
         grid.buildGrid(this.scale.width, this.scale.height);
         grid.loadGameComponents(this);
@@ -93,36 +154,486 @@ export class MainGame extends Scene {
         this.pendingRequestsPanel = new PendingRequestsPanel(
             this,
             this.scale.width - 272,
-            72,
+            152,
             this.erDiagram,
         );
 
         this.queueManager = new QueueManager(store);
-        this.queueManager.init();
+        this.configureInitialMode();
 
         this.dialogueModal = new NPCDialogueModal(this);
 
         this.queuePanel = new QueuePanel(this, this.queueManager, (entry) => {
+            this.setActiveRequest(entry);
             this.dialogueModal!.show(entry);
         });
 
         this.createTimeoutHud();
         this.createScoreHud();
+        this.createLevelHud();
+        this.createActiveRequestHud();
         this.createRequestHud();
         this.createFailureFlashOverlay();
+        this.createBossSuccessOverlay();
+        this.refreshLevelHud();
+        this.syncActiveRequestAfterQueueChange();
         this.startGameCountdown();
 
         EventBus.emit("current-scene-ready", this);
+    }
+
+    private resetRuntimeState() {
+        this.erDiagram = undefined;
+        this.queueManager = undefined;
+        this.queuePanel = undefined;
+        this.dialogueModal = undefined;
+        this.pendingRequestsPanel = undefined;
+        this.score = 0;
+        this.lastBossSpawnScore = 0;
+        this.completedRequestCount = 0;
+        this.timeoutNormalized = 1;
+        this.gameOverTriggered = false;
+        this.gameActive = false;
+        this.currentLevelIndex = 0;
+        this.currentLevel = undefined;
+        this.endlessModeActive = false;
+        this.availableRequestMethods = new Set<ApiRequestMethod>(["GET"]);
+        this.methodButtons.clear();
+        this.levelOverlayObjects = [];
+        this.activeRequestEntry = undefined;
+        this.tutorialCoachKey = "";
+        this.clearEnterHoldTimer();
+        this.clearLevelIntroToast();
+    }
+
+    private configureInitialMode() {
+        if (this.startInEndlessMode) {
+            this.activateEndlessMode(false);
+            return;
+        }
+        if (this.startLevelIndex !== undefined) {
+            this.activateLevel(this.startLevelIndex, false);
+            return;
+        }
+        this.activateLevel(0, false);
+    }
+
+    private startDevLevel(levelIndex: number) {
+        if (!isDevLevelIndex(levelIndex)) {
+            return;
+        }
+        this.scene.start("MainGame", { startLevelIndex: levelIndex });
+    }
+
+    private activateLevel(levelIndex: number, startCountdown: boolean) {
+        const level = LEVEL_DEFINITIONS[levelIndex];
+        if (!this.queueManager) {
+            return;
+        }
+        this.clearLevelOverlay();
+        this.clearTutorialHint();
+        this.currentLevelIndex = levelIndex;
+        this.currentLevel = level;
+        this.endlessModeActive = false;
+        this.gameActive = false;
+        this.erDiagram?.clearSelectedRequestMethod();
+        this.requestKindText?.setText("Cache Method: --");
+        this.applyUnlockedTables(level.unlockedTables);
+        this.setAvailableRequestMethods(
+            level.requests.map((request) => request.objective.method),
+        );
+        this.queueManager.startFixedLevel(
+            level.requests,
+            this.difficultyForLevel(level),
+        );
+        this.syncActiveRequestAfterQueueChange();
+        this.setTimeoutNormalized(1);
+        this.queuePanel?.draw();
+        this.refreshLevelHud();
+        this.updateConfirmButtonState();
+        if (startCountdown) {
+            this.startGameCountdown();
+        }
+    }
+
+    private activateEndlessMode(startCountdown: boolean) {
+        if (!this.queueManager) {
+            return;
+        }
+        this.clearLevelOverlay();
+        this.clearTutorialHint();
+        this.currentLevel = undefined;
+        this.endlessModeActive = true;
+        this.gameActive = false;
+        this.erDiagram?.clearSelectedRequestMethod();
+        this.requestKindText?.setText("Cache Method: --");
+        this.applyUnlockedTables(ENDLESS_MODE_DEFINITION.unlockedTables);
+        this.setAvailableRequestMethods(ENDLESS_MODE_DEFINITION.requestMethods);
+        this.queueManager.startEndlessMode();
+        this.syncActiveRequestAfterQueueChange();
+        this.setTimeoutNormalized(1);
+        this.queuePanel?.draw();
+        this.refreshLevelHud();
+        this.updateConfirmButtonState();
+        if (startCountdown) {
+            this.startGameCountdown();
+        }
+    }
+
+    private difficultyForLevel(level: LevelDefinition): 1 | 2 | 3 {
+        if (level.id === "tutorial" || level.id === "level-1") {
+            return 1;
+        }
+        if (
+            level.id === "level-2" ||
+            level.id === "level-3" ||
+            level.id === "level-4"
+        ) {
+            return 2;
+        }
+        return 3;
+    }
+
+    private applyUnlockedTables(unlockedTables: EntityType[]) {
+        const unlocked = new Set(unlockedTables);
+        for (const table of ALL_TABLES) {
+            if (unlocked.has(table)) {
+                this.erDiagram?.revealTable(table);
+            } else {
+                this.erDiagram?.hideTable(table);
+            }
+        }
+    }
+
+    private setAvailableRequestMethods(methods: ApiRequestMethod[]) {
+        this.availableRequestMethods = new Set(methods);
+        const selected = this.erDiagram?.getSelectedRequestMethod();
+        if (selected && !this.availableRequestMethods.has(selected)) {
+            this.erDiagram?.clearSelectedRequestMethod();
+            this.requestKindText?.setText("Cache Method: --");
+        }
+        for (const method of this.requestMethods) {
+            this.styleMethodButton(method, method === selected);
+        }
+    }
+
+    private shouldTimerRun(): boolean {
+        if (this.endlessModeActive) {
+            return ENDLESS_MODE_DEFINITION.timerRuns;
+        }
+        return this.currentLevel?.mode !== "tutorial";
+    }
+
+    private shouldRewardTimeOnCorrect(): boolean {
+        return (
+            this.endlessModeActive &&
+            ENDLESS_MODE_DEFINITION.rewardTimeOnCorrect
+        );
+    }
+
+    private checkFixedLevelCompletion() {
+        if (
+            this.endlessModeActive ||
+            !this.currentLevel ||
+            !this.queueManager?.isFixedLevelComplete()
+        ) {
+            return;
+        }
+        this.showLevelCompleteOverlay();
+    }
+
+    private refreshTutorialCoach() {
+        if (
+            this.currentLevel?.mode !== "tutorial" ||
+            this.endlessModeActive ||
+            this.levelOverlayObjects.length > 0
+        ) {
+            this.clearTutorialHint();
+            return;
+        }
+
+        if (!this.activeRequestEntry) {
+            const firstEntry = this.queueManager?.getQueue()[0];
+            this.setTutorialCoach(
+                "First, talk to Alice. Click her NPC card so you can read what she needs.",
+                firstEntry ?
+                    this.queuePanel?.getCardBounds(firstEntry.npc.id)
+                :   undefined,
+                "click-npc",
+            );
+            return;
+        }
+
+        if (this.erDiagram?.hasPendingChanges()) {
+            this.setTutorialCoach(
+                "Beautiful, the response is staged. Click Confirm Request(s) to send it back to Alice.",
+                this.submitButton?.getBounds(),
+                "confirm",
+            );
+            return;
+        }
+
+        if (this.erDiagram?.isTableModalVisible()) {
+            if (this.erDiagram.hasStagedGetTarget(TUTORIAL_GET_TARGET)) {
+                this.setTutorialCoach(
+                    "Perfect. That checkmark means Alice's name field is selected. Click Save in this table window.",
+                    this.erDiagram.getTableModalSaveButtonBounds(),
+                    "save-get",
+                );
+                return;
+            }
+            this.setTutorialCoach(
+                "Now choose the exact data to return. Click the name: Alice field in row 1.",
+                this.erDiagram.getGetTargetBounds(TUTORIAL_GET_TARGET),
+                "select-name",
+            );
+            return;
+        }
+
+        if (this.erDiagram?.getSelectedRequestMethod() !== "GET") {
+            this.setTutorialCoach(
+                "Let's start with a read. Click GET, the green method button, because Alice only needs us to look something up.",
+                this.methodButtons.get("GET")?.container.getBounds(),
+                "select-get",
+            );
+            return;
+        }
+
+        this.setTutorialCoach(
+            "Nice. GET is selected. Now click the USER table; that's where Alice's row lives.",
+            this.erDiagram.getEntityNodeBounds("USER"),
+            "open-user",
+        );
+    }
+
+    private setTutorialCoach(
+        message: string,
+        targetBounds: Phaser.Geom.Rectangle | undefined,
+        key: string,
+    ) {
+        if (!this.tutorialHintText) {
+            this.tutorialHintText = this.add
+                .text(this.scale.width / 2, 286, "", {
+                    color: "#111111",
+                    fontSize: "16px",
+                    fontStyle: "bold",
+                    backgroundColor: "#fff7cc",
+                    padding: { x: 12, y: 8 },
+                    align: "center",
+                    wordWrap: { width: 680 },
+                })
+                .setDepth(3001)
+                .setOrigin(0.5, 0)
+                .setScrollFactor(0);
+            this.tutorialHintText.setStroke("#8a6d3b", 2);
+        }
+        this.tutorialHintText.setY(this.tutorialCoachYFor(key));
+        if (this.tutorialCoachKey !== key) {
+            this.tutorialCoachKey = key;
+            this.tutorialHintText.setText(message);
+        }
+        this.tutorialHintText.setVisible(true);
+        this.drawTutorialHighlight(targetBounds);
+    }
+
+    private tutorialCoachYFor(key: string): number {
+        if (key === "select-name" || key === "save-get") {
+            return 82;
+        }
+        return 286;
+    }
+
+    private drawTutorialHighlight(targetBounds?: Phaser.Geom.Rectangle) {
+        if (!this.tutorialHighlight) {
+            this.tutorialHighlight = this.add.graphics();
+            this.tutorialHighlight.setDepth(3002);
+            this.tutorialHighlight.setScrollFactor(0);
+        }
+        this.tutorialHighlight.clear();
+        if (!targetBounds) {
+            this.tutorialHighlight.setVisible(false);
+            return;
+        }
+        const pad = 8;
+        this.tutorialHighlight.setVisible(true);
+        this.tutorialHighlight.lineStyle(5, 0xffd23f, 1);
+        this.tutorialHighlight.strokeRoundedRect(
+            targetBounds.x - pad,
+            targetBounds.y - pad,
+            targetBounds.width + pad * 2,
+            targetBounds.height + pad * 2,
+            8,
+        );
+        this.tutorialHighlight.lineStyle(2, 0x111111, 0.85);
+        this.tutorialHighlight.strokeRoundedRect(
+            targetBounds.x - pad - 3,
+            targetBounds.y - pad - 3,
+            targetBounds.width + pad * 2 + 6,
+            targetBounds.height + pad * 2 + 6,
+            10,
+        );
+    }
+
+    private clearTutorialHint() {
+        this.tutorialCoachKey = "";
+        this.tutorialHintText?.destroy();
+        this.tutorialHintText = undefined;
+        this.tutorialHighlight?.destroy();
+        this.tutorialHighlight = undefined;
+    }
+
+    private showLevelCompleteOverlay() {
+        if (!this.currentLevel || this.levelOverlayObjects.length > 0) {
+            return;
+        }
+        this.gameActive = false;
+        this.input.enabled = true;
+        this.updateConfirmButtonState();
+        this.clearTutorialHint();
+        this.setActiveRequest(undefined);
+
+        const overlay = this.add
+            .rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                0x000000,
+                0.45,
+            )
+            .setDepth(2600)
+            .setScrollFactor(0);
+        const titleText =
+            this.currentLevelIndex >= LEVEL_DEFINITIONS.length - 1 ?
+                "All Levels Complete"
+            :   `${this.currentLevel.title} Complete`;
+        const title = this.add
+            .text(this.scale.width / 2, this.scale.height / 2 - 92, titleText, {
+                color: "#ffffff",
+                fontSize: "44px",
+                fontStyle: "bold",
+                stroke: "#111111",
+                strokeThickness: 7,
+                align: "center",
+            })
+            .setOrigin(0.5)
+            .setDepth(2601)
+            .setScrollFactor(0);
+        this.levelOverlayObjects.push(overlay, title);
+
+        if (this.currentLevelIndex < LEVEL_DEFINITIONS.length - 1) {
+            const nextLevel = LEVEL_DEFINITIONS[this.currentLevelIndex + 1];
+            const subtitle = this.add
+                .text(
+                    this.scale.width / 2,
+                    this.scale.height / 2 - 34,
+                    `Next: ${nextLevel.title}`,
+                    {
+                        color: "#ffffff",
+                        fontSize: "22px",
+                        fontStyle: "bold",
+                        align: "center",
+                    },
+                )
+                .setOrigin(0.5)
+                .setDepth(2601)
+                .setScrollFactor(0);
+            const continueButton = this.createOverlayButton(
+                this.scale.width / 2,
+                this.scale.height / 2 + 36,
+                "Continue",
+                () => this.activateLevel(this.currentLevelIndex + 1, true),
+            );
+            this.levelOverlayObjects.push(subtitle, continueButton);
+            return;
+        }
+
+        const subtitle = this.add
+            .text(
+                this.scale.width / 2,
+                this.scale.height / 2 - 34,
+                "Choose your next run.",
+                {
+                    color: "#ffffff",
+                    fontSize: "22px",
+                    fontStyle: "bold",
+                    align: "center",
+                },
+            )
+            .setOrigin(0.5)
+            .setDepth(2601)
+            .setScrollFactor(0);
+        const startOverButton = this.createOverlayButton(
+            this.scale.width / 2 - 116,
+            this.scale.height / 2 + 42,
+            "Start Over",
+            () => this.scene.start("MainGame"),
+        );
+        const endlessButton = this.createOverlayButton(
+            this.scale.width / 2 + 126,
+            this.scale.height / 2 + 42,
+            "Endless Mode",
+            () => this.activateEndlessMode(true),
+        );
+        this.levelOverlayObjects.push(subtitle, startOverButton, endlessButton);
+    }
+
+    private createOverlayButton(
+        x: number,
+        y: number,
+        label: string,
+        onClick: () => void,
+    ): Phaser.GameObjects.Text {
+        const button = this.add
+            .text(x, y, label, {
+                color: "#ffffff",
+                fontSize: "22px",
+                fontStyle: "bold",
+                backgroundColor: "#0b8f08",
+                padding: { x: 18, y: 10 },
+            })
+            .setOrigin(0.5)
+            .setDepth(2601)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+        button.setStroke("#063f05", 3);
+        button.on("pointerdown", onClick);
+        return button;
+    }
+
+    private clearLevelOverlay() {
+        for (const object of this.levelOverlayObjects) {
+            object.destroy();
+        }
+        this.levelOverlayObjects = [];
     }
 
     private addScore(entry: QueueEntry) {
         const points = this.queueManager!.getPointValue(entry);
         this.score += points;
         this.updateScoreHud();
+        this.checkBossSpawn();
+    }
+
+    private checkBossSpawn() {
+        if (!this.queueManager || !this.queuePanel) return;
+        if (!this.endlessModeActive) return;
+        if (this.queueManager.hasBossInQueue()) return;
+
+        const scoresSinceLastBoss = this.score - this.lastBossSpawnScore;
+        if (scoresSinceLastBoss >= BOSS_SCORE_THRESHOLD) {
+            this.lastBossSpawnScore = this.score;
+            this.queueManager.spawnBoss();
+            this.queuePanel.draw();
+        }
     }
 
     update(_time: number, delta: number) {
         if (this.gameOverTriggered || !this.gameActive) {
+            return;
+        }
+        this.refreshTutorialCoach();
+        if (!this.shouldTimerRun()) {
             return;
         }
         const elapsedSeconds = delta / 1000;
@@ -139,7 +650,7 @@ export class MainGame extends Scene {
         const inventoryWidth = Math.floor(width * 0.5);
         const inventoryHeight = 120;
         const hiddenBottomPx = 24;
-        const inventoryX = (width - inventoryWidth) / 2 + 100;
+        const inventoryX = width - inventoryWidth - 20;
         const inventoryY = height - inventoryHeight + hiddenBottomPx;
 
         this.requestKindText = this.add
@@ -258,28 +769,44 @@ export class MainGame extends Scene {
         if (!button) {
             return;
         }
+        const available = this.availableRequestMethods.has(method);
         const colors = METHOD_UI_COLORS[method];
         button.box.setFillStyle(
             this.toColorNumber(
-                selected ? colors.selectedBackground : colors.background,
+                selected && available ?
+                    colors.selectedBackground
+                :   colors.background,
             ),
-            1,
+            available ? 1 : 0.45,
         );
-        if (selected) {
+        if (selected && available) {
             button.box.setStrokeStyle(4, 0x000000, 1);
         } else {
             button.box.setStrokeStyle();
         }
         button.label.setStyle({
-            fontSize: selected ? "16px" : "15px",
+            fontSize: selected && available ? "16px" : "15px",
             fontStyle: "bold",
-            color: colors.text,
+            color: available ? colors.text : "#666666",
         });
-        button.container.setDepth(selected ? 12 : 10);
+        button.container.setAlpha(available ? 1 : 0.45);
+        button.container.setDepth(selected && available ? 12 : 10);
     }
 
     private selectMethod(method: ApiRequestMethod) {
         if (!this.gameActive || this.gameOverTriggered) {
+            return;
+        }
+        if (
+            this.currentLevel?.mode === "tutorial" &&
+            !this.activeRequestEntry
+        ) {
+            this.flashFailureOverlay();
+            this.refreshTutorialCoach();
+            return;
+        }
+        if (!this.availableRequestMethods.has(method)) {
+            this.flashFailureOverlay();
             return;
         }
         this.erDiagram?.setSelectedRequestMethod(method);
@@ -320,7 +847,10 @@ export class MainGame extends Scene {
         }
 
         this.completedRequestCount += result.matched.length;
-        this.applyTimeoutRewardSeries(result.matched.length);
+        if (this.shouldRewardTimeOnCorrect()) {
+            this.applyTimeoutRewardSeries(result.matched.length);
+        }
+        this.refreshLevelHud();
 
         const matchedNpcIds = Array.from(
             new Set(result.matched.map((match) => match.npcId)),
@@ -335,7 +865,10 @@ export class MainGame extends Scene {
             }
             remainingAnimations -= 1;
             if (remainingAnimations <= 0) {
+                this.syncActiveRequestAfterQueueChange();
                 this.queuePanel!.draw();
+                this.refreshLevelHud();
+                this.checkFixedLevelCompletion();
             }
         };
 
@@ -347,18 +880,119 @@ export class MainGame extends Scene {
             }
             this.queuePanel!.flashNpcSuccess(
                 npcId,
-                this.successStatusCodeForMethod(entry.question.objective.method),
+                this.successStatusCodeForMethod(
+                    entry.question.objective.method,
+                ),
                 () => {
                     if (this.gameOverTriggered) {
                         onSuccessComplete();
                         return;
                     }
+                    const wasBoss = entry.isBoss === true;
                     this.queueManager!.completeNpcEntry(entry);
                     this.addScore(entry);
+
+                    if (wasBoss) {
+                        this.onBossDefeated();
+                    }
+
                     onSuccessComplete();
                 },
             );
         }
+    }
+
+    private onBossDefeated() {
+        if (!this.endlessModeActive) {
+            return;
+        }
+        // 1. increase difficulty FIRST so resetQueue picks new questions at new difficulty
+        this.queueManager!.increaseDifficulty();
+
+        // 2. reset queue so all NPCs get fresh questions at the new difficulty
+        this.queueManager!.resetQueue();
+
+        // 3. reveal tables based on how many bosses have been defeated
+        const bossCount = this.queueManager!.getBossCount();
+        if (bossCount === 1) {
+            this.erDiagram!.revealTable("PET");
+            this.erDiagram!.revealTable("HOUSE");
+        } else if (bossCount === 2) {
+            this.erDiagram!.revealTable("JOB");
+            this.erDiagram!.revealTable("VEHICLE");
+            this.erDiagram!.revealTable("EMPLOYMENT");
+        }
+
+        // 4. big timeout refill
+        this.applyTimeoutBurst(TIMEOUT_BOSS_REWARD);
+
+        // 5. flash gold overlay
+        this.flashBossSuccessOverlay();
+    }
+
+    private createBossSuccessOverlay() {
+        this.bossSuccessOverlay = this.add
+            .rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                0xffaa00,
+                0.35,
+            )
+            .setDepth(2000)
+            .setVisible(false)
+            .setScrollFactor(0);
+
+        this.bossSuccessText = this.add
+            .text(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                "BOSS DEFEATED!\n+Time Refill",
+                {
+                    color: "#ffffff",
+                    fontSize: "48px",
+                    fontStyle: "bold",
+                    stroke: "#aa5500",
+                    strokeThickness: 8,
+                    align: "center",
+                },
+            )
+            .setOrigin(0.5)
+            .setDepth(2001)
+            .setVisible(false)
+            .setScrollFactor(0);
+    }
+
+    private flashBossSuccessOverlay() {
+        if (!this.bossSuccessOverlay || !this.bossSuccessText) return;
+
+        this.bossSuccessOverlay.setAlpha(0.35).setVisible(true);
+        this.bossSuccessText.setAlpha(1).setVisible(true).setScale(0.8);
+
+        this.tweens.killTweensOf(this.bossSuccessOverlay);
+        this.tweens.killTweensOf(this.bossSuccessText);
+
+        this.tweens.add({
+            targets: this.bossSuccessText,
+            scaleX: 1.05,
+            scaleY: 1.05,
+            duration: 300,
+            ease: "Sine.easeOut",
+        });
+
+        this.time.delayedCall(1200, () => {
+            this.tweens.add({
+                targets: [this.bossSuccessOverlay, this.bossSuccessText],
+                alpha: 0,
+                duration: 400,
+                ease: "Quad.easeOut",
+                onComplete: () => {
+                    this.bossSuccessOverlay?.setVisible(false);
+                    this.bossSuccessText?.setVisible(false);
+                },
+            });
+        });
     }
 
     private updateConfirmButtonState() {
@@ -450,7 +1084,7 @@ export class MainGame extends Scene {
 
     private createScoreHud() {
         this.scoreText = this.add
-            .text(this.scale.width / 2, 16, "", {
+            .text(this.scale.width - 16, 14, "", {
                 color: "#111",
                 fontSize: "18px",
                 fontStyle: "bold",
@@ -458,13 +1092,141 @@ export class MainGame extends Scene {
                 padding: { x: 10, y: 5 },
             })
             .setDepth(31)
-            .setOrigin(0.5, 0);
+            .setOrigin(1, 0);
 
         this.updateScoreHud();
     }
 
+    private createLevelHud() {
+        this.levelText = this.add
+            .text(this.scale.width - 16, 50, "", {
+                color: "#111",
+                fontSize: "16px",
+                fontStyle: "bold",
+                backgroundColor: "#ffffff",
+                padding: { x: 10, y: 5 },
+            })
+            .setDepth(31)
+            .setOrigin(1, 0);
+    }
+
+    private createActiveRequestHud() {
+        const panelWidth = 590;
+        this.activeRequestBackground = this.add
+            .rectangle(0, 0, panelWidth, 62, 0xffffff, 0.96)
+            .setOrigin(0.5, 0);
+        this.activeRequestBackground.setStrokeStyle(3, 0x111111, 0.9);
+
+        this.activeRequestTitleText = this.add
+            .text(-panelWidth / 2 + 14, 8, "", {
+                color: "#111111",
+                fontSize: "14px",
+                fontStyle: "bold",
+            })
+            .setOrigin(0, 0);
+
+        this.activeRequestBodyText = this.add
+            .text(-panelWidth / 2 + 14, 30, "", {
+                color: "#222222",
+                fontSize: "12px",
+                fontFamily: "monospace",
+                wordWrap: { width: panelWidth - 28 },
+            })
+            .setOrigin(0, 0);
+
+        this.activeRequestContainer = this.add
+            .container(318, 8, [
+                this.activeRequestBackground,
+                this.activeRequestTitleText,
+                this.activeRequestBodyText,
+            ])
+            .setDepth(3000)
+            .setVisible(false)
+            .setScrollFactor(0);
+        this.updateActiveRequestHud();
+    }
+
     private updateScoreHud() {
         this.scoreText?.setText(`Score: ${this.score}`);
+    }
+
+    private refreshLevelHud() {
+        if (!this.levelText) {
+            return;
+        }
+        if (this.endlessModeActive) {
+            this.levelText.setText("Endless Mode");
+            return;
+        }
+        if (!this.currentLevel || !this.queueManager) {
+            this.levelText.setText("");
+            return;
+        }
+        const progress = this.queueManager.getFixedLevelProgress();
+        this.levelText.setText(
+            `${this.currentLevel.title}: ${progress.completed}/${progress.total}`,
+        );
+    }
+
+    private setActiveRequest(entry?: QueueEntry) {
+        this.activeRequestEntry = entry;
+        this.updateActiveRequestHud();
+    }
+
+    private syncActiveRequestAfterQueueChange() {
+        if (!this.queueManager) {
+            this.setActiveRequest(undefined);
+            return;
+        }
+        const queue = this.queueManager.getQueue();
+        if (
+            this.currentLevel?.mode === "tutorial" &&
+            !this.activeRequestEntry
+        ) {
+            this.setActiveRequest(undefined);
+            return;
+        }
+        const activeEntry = this.activeRequestEntry;
+        if (activeEntry) {
+            const activeStillQueued = queue.some((entry) =>
+                this.isSameQueueEntry(entry, activeEntry),
+            );
+            if (activeStillQueued) {
+                this.updateActiveRequestHud();
+                return;
+            }
+        }
+        this.setActiveRequest(queue[0]);
+    }
+
+    private isSameQueueEntry(a: QueueEntry, b: QueueEntry): boolean {
+        if (a.requestId || b.requestId) {
+            return a.requestId === b.requestId;
+        }
+        return a.npc.id === b.npc.id;
+    }
+
+    private updateActiveRequestHud() {
+        if (
+            !this.activeRequestContainer ||
+            !this.activeRequestTitleText ||
+            !this.activeRequestBodyText
+        ) {
+            return;
+        }
+        if (!this.activeRequestEntry) {
+            this.activeRequestContainer.setVisible(false);
+            return;
+        }
+        this.activeRequestTitleText.setText(
+            `Active request: ${this.activeRequestEntry.npc.name} [${this.activeRequestEntry.npc.id}]`,
+        );
+        this.activeRequestBodyText.setText(
+            this.activeRequestEntry.question.naturalDialogue ||
+                this.activeRequestEntry.question.dialogue,
+        );
+        this.activeRequestContainer.setVisible(true);
+        this.activeRequestContainer.setDepth(3000);
     }
 
     private flashFailureOverlay() {
@@ -491,7 +1253,9 @@ export class MainGame extends Scene {
                     return;
                 }
                 this.flashFailureOverlay();
-                this.applyTimeoutBurst(-TIMEOUT_PENALTY_PER_INCORRECT);
+                if (this.shouldTimerRun()) {
+                    this.applyTimeoutBurst(-TIMEOUT_PENALTY_PER_INCORRECT);
+                }
             });
         }
     }
@@ -569,7 +1333,10 @@ export class MainGame extends Scene {
             .setVisible(true)
             .setAlpha(0.95)
             .setY(fromGeometry.y)
-            .setDisplaySize(TIMEOUT_BAR_WIDTH + 4, Math.max(2, fromGeometry.height));
+            .setDisplaySize(
+                TIMEOUT_BAR_WIDTH + 4,
+                Math.max(2, fromGeometry.height),
+            );
         this.tweens.add({
             targets: preview,
             y: toGeometry.y,
@@ -611,6 +1378,9 @@ export class MainGame extends Scene {
             return;
         }
         this.methodHotkeyHandler = (event: KeyboardEvent) => {
+            if (event.defaultPrevented) {
+                return;
+            }
             if (!this.gameActive || this.gameOverTriggered) {
                 return;
             }
@@ -618,6 +1388,9 @@ export class MainGame extends Scene {
                 if (this.closeTopModalIfOpen()) {
                     event.preventDefault();
                 }
+                return;
+            }
+            if (this.hasOpenModal()) {
                 return;
             }
             if (this.isEnterKey(event)) {
@@ -670,6 +1443,7 @@ export class MainGame extends Scene {
                 this.startCountdownTimer = undefined;
             }
             this.clearStartCountdownOverlay();
+            this.clearLevelIntroToast();
             if (!this.input.keyboard) {
                 return;
             }
@@ -677,7 +1451,10 @@ export class MainGame extends Scene {
                 this.input.keyboard.off("keydown", this.methodHotkeyHandler);
             }
             if (this.methodHotkeyReleaseHandler) {
-                this.input.keyboard.off("keyup", this.methodHotkeyReleaseHandler);
+                this.input.keyboard.off(
+                    "keyup",
+                    this.methodHotkeyReleaseHandler,
+                );
             }
             this.methodHotkeyHandler = undefined;
             this.methodHotkeyReleaseHandler = undefined;
@@ -685,9 +1462,21 @@ export class MainGame extends Scene {
     }
 
     private startGameCountdown() {
+        this.clearStartCountdownOverlay();
+        if (this.currentLevel?.mode === "tutorial") {
+            this.gameActive = true;
+            this.input.enabled = true;
+            this.updateConfirmButtonState();
+            this.refreshLevelHud();
+            this.showLevelIntroToast();
+            this.refreshTutorialCoach();
+            return;
+        }
+
+        this.clearTutorialHint();
         this.gameActive = false;
         this.updateConfirmButtonState();
-        this.input.enabled = false;
+        this.input.enabled = true;
 
         this.startCountdownOverlay = this.add
             .rectangle(
@@ -699,19 +1488,75 @@ export class MainGame extends Scene {
                 0.35,
             )
             .setDepth(2500)
-            .setScrollFactor(0);
+            .setScrollFactor(0)
+            .setInteractive();
+
+        if (this.currentLevel?.intro) {
+            this.startCountdownIntroText = this.add
+                .text(
+                    this.scale.width / 2,
+                    this.scale.height / 2 - 134,
+                    `${this.currentLevel.title}\n${this.currentLevel.intro}`,
+                    {
+                        color: "#ffffff",
+                        fontSize: "21px",
+                        fontStyle: "bold",
+                        stroke: "#111111",
+                        strokeThickness: 5,
+                        align: "center",
+                        wordWrap: {
+                            width: Math.min(760, this.scale.width - 48),
+                        },
+                    },
+                )
+                .setOrigin(0.5)
+                .setDepth(2501)
+                .setScrollFactor(0);
+        }
 
         this.startCountdownText = this.add
-            .text(this.scale.width / 2, this.scale.height / 2, "", {
+            .text(this.scale.width / 2, this.scale.height / 2 + 56, "", {
                 color: "#ffffff",
-                fontSize: "140px",
+                fontSize: "30px",
                 fontStyle: "bold",
                 stroke: "#111111",
-                strokeThickness: 10,
+                strokeThickness: 6,
+                align: "center",
             })
             .setOrigin(0.5)
             .setDepth(2501)
             .setScrollFactor(0);
+
+        this.showCountdownStartPrompt();
+        this.waitForCountdownStartInput();
+    }
+
+    private waitForCountdownStartInput() {
+        this.clearStartCountdownEnterHandler();
+        if (!this.input.keyboard) {
+            this.beginStartCountdownTicks();
+            return;
+        }
+        this.startCountdownEnterHandler = (event: KeyboardEvent) => {
+            if (
+                event.defaultPrevented ||
+                event.repeat ||
+                !this.isEnterKey(event)
+            ) {
+                return;
+            }
+            event.preventDefault();
+            this.beginStartCountdownTicks();
+        };
+        this.input.keyboard.on("keydown", this.startCountdownEnterHandler);
+    }
+
+    private beginStartCountdownTicks() {
+        if (!this.startCountdownText) {
+            return;
+        }
+        this.clearStartCountdownEnterHandler();
+        this.input.enabled = false;
 
         let secondsRemaining = 3;
         this.showCountdownText(`${secondsRemaining}`, false);
@@ -726,6 +1571,32 @@ export class MainGame extends Scene {
                 }
                 this.startGameplayPhase();
             },
+        });
+    }
+
+    private showCountdownStartPrompt() {
+        if (!this.startCountdownText) {
+            return;
+        }
+        this.startCountdownText.setText("Press Enter to Start Countdown");
+        this.startCountdownText.setStyle({
+            color: "#ffffff",
+            fontSize: "30px",
+            fontStyle: "bold",
+            stroke: "#111111",
+            strokeThickness: 6,
+            align: "center",
+        });
+        this.startCountdownText.setScale(1);
+        this.startCountdownText.setAlpha(1);
+        this.tweens.killTweensOf(this.startCountdownText);
+        this.tweens.add({
+            targets: this.startCountdownText,
+            alpha: 0.62,
+            duration: 620,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.easeInOut",
         });
     }
 
@@ -758,20 +1629,86 @@ export class MainGame extends Scene {
         this.gameActive = true;
         this.input.enabled = true;
         this.updateConfirmButtonState();
+        this.refreshLevelHud();
         this.showCountdownText("RUSH!", true);
         this.time.delayedCall(650, () => {
             this.clearStartCountdownOverlay();
         });
     }
 
+    private showLevelIntroToast() {
+        const level = this.currentLevel;
+        if (!level?.intro) {
+            return;
+        }
+        this.clearLevelIntroToast();
+
+        const toastWidth = Math.min(760, this.scale.width - 48);
+        const text = this.add
+            .text(0, 0, `${level.title}\n${level.intro}`, {
+                color: "#ffffff",
+                fontSize: "17px",
+                fontStyle: "bold",
+                align: "center",
+                wordWrap: { width: toastWidth - 28 },
+            })
+            .setOrigin(0.5);
+        const toastHeight = Math.max(72, text.height + 24);
+        const background = this.add
+            .rectangle(0, 0, toastWidth, toastHeight, 0x111111, 0.88)
+            .setStrokeStyle(2, 0xffffff, 0.8);
+        this.levelIntroToast = this.add
+            .container(this.scale.width / 2, 108, [background, text])
+            .setDepth(3004)
+            .setScrollFactor(0);
+        this.levelIntroToastTimer = this.time.delayedCall(4200, () => {
+            if (!this.levelIntroToast) {
+                return;
+            }
+            this.tweens.add({
+                targets: this.levelIntroToast,
+                alpha: 0,
+                duration: 280,
+                ease: "Quad.easeOut",
+                onComplete: () => this.clearLevelIntroToast(),
+            });
+        });
+    }
+
+    private clearLevelIntroToast() {
+        this.levelIntroToastTimer?.remove(false);
+        this.levelIntroToastTimer = undefined;
+        this.levelIntroToast?.destroy();
+        this.levelIntroToast = undefined;
+    }
+
     private clearStartCountdownOverlay() {
+        this.clearStartCountdownEnterHandler();
+        if (this.startCountdownTimer) {
+            this.startCountdownTimer.remove(false);
+            this.startCountdownTimer = undefined;
+        }
         if (this.startCountdownText) {
             this.tweens.killTweensOf(this.startCountdownText);
         }
+        if (this.startCountdownIntroText) {
+            this.tweens.killTweensOf(this.startCountdownIntroText);
+        }
         this.startCountdownText?.destroy();
         this.startCountdownText = undefined;
+        this.startCountdownIntroText?.destroy();
+        this.startCountdownIntroText = undefined;
         this.startCountdownOverlay?.destroy();
         this.startCountdownOverlay = undefined;
+    }
+
+    private clearStartCountdownEnterHandler() {
+        if (!this.startCountdownEnterHandler || !this.input.keyboard) {
+            this.startCountdownEnterHandler = undefined;
+            return;
+        }
+        this.input.keyboard.off("keydown", this.startCountdownEnterHandler);
+        this.startCountdownEnterHandler = undefined;
     }
 
     private clearEnterHoldTimer() {
@@ -788,7 +1725,8 @@ export class MainGame extends Scene {
 
     private hasOpenModal(): boolean {
         return Boolean(
-            this.dialogueModal?.isVisible() || this.erDiagram?.hasOpenModalLayer(),
+            this.dialogueModal?.isVisible() ||
+            this.erDiagram?.hasOpenModalLayer(),
         );
     }
 
