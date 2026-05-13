@@ -1,12 +1,14 @@
 ---
 waltz:
   title: EGDD - RushAPI
-meta:
-  version: 0.0.1
-  gdd authors:
+
+version: 0.0.1
+
+authors:
+  gdd:
     - Bruce Bermel <brbe@udel.edu>
     - John-Paul Newton <jpnewton@udel.edu>
-  template authors:
+  template:
     - Austin Cory Bart <acbart@udel.edu>
     - Mark Sheriff
     - Alec Markarian
