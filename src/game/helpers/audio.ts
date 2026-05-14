@@ -3,6 +3,7 @@ import type { Scene } from "phaser";
 const BGM_KEY = "bgm";
 const POP_KEY = "request-success";
 const SAW_KEY = "request-failure";
+const START_KEY = "rush-start";
 const GAMEPLAY_MUSIC_UNLOCKED_KEY = "gameplay-music-unlocked";
 
 export function hasUnlockedGameplayMusic(scene: Scene): boolean {
@@ -23,7 +24,7 @@ export function ensureGameplayMusic(scene: Scene) {
 
     const music = scene.sound.add(BGM_KEY, {
         loop: true,
-        volume: 0.28,
+        volume: 0.16,
     });
     music.play();
 }
@@ -34,9 +35,13 @@ export function unlockGameplayMusic(scene: Scene) {
 }
 
 export function playRequestSuccessSound(scene: Scene) {
-    scene.sound.play(POP_KEY, { volume: 0.7 });
+    scene.sound.play(POP_KEY, { volume: 0.95 });
 }
 
 export function playRequestFailureSound(scene: Scene) {
-    scene.sound.play(SAW_KEY, { volume: 0.65 });
+    scene.sound.play(SAW_KEY, { volume: 0.9 });
+}
+
+export function playRushStartSound(scene: Scene) {
+    scene.sound.play(START_KEY, { volume: 0.75 });
 }

@@ -22,6 +22,7 @@ import {
     hasUnlockedGameplayMusic,
     playRequestFailureSound,
     playRequestSuccessSound,
+    playRushStartSound,
     unlockGameplayMusic,
 } from "../helpers/audio";
 import {
@@ -46,6 +47,7 @@ const TIMEOUT_BAR_X = 22;
 const TIMEOUT_BAR_Y = 54;
 const BOSS_SCORE_THRESHOLD = 30;
 const MAX_CONTINUES = 3;
+const NO_ACTIVE_REQUEST_NUDGE_DELAY_MS = 10_000;
 const ALL_TABLES: EntityType[] = [
     "USER",
     "PET",
@@ -133,6 +135,8 @@ export class MainGame extends Scene {
     private activeRequestBackground?: Phaser.GameObjects.Rectangle;
     private activeRequestTitleText?: Phaser.GameObjects.Text;
     private activeRequestBodyText?: Phaser.GameObjects.Text;
+    private noActiveRequestNudgeTimer?: Phaser.Time.TimerEvent;
+    private noActiveRequestNudgeHighlight?: Phaser.GameObjects.Graphics;
 
     constructor() {
         super("MainGame");
@@ -233,6 +237,7 @@ export class MainGame extends Scene {
         this.activeRequestEntry = undefined;
         this.timedRequestEntry = undefined;
         this.tutorialCoachKey = "";
+        this.clearNoActiveRequestNudge();
         this.clearEnterHoldTimer();
         this.clearLevelIntroToast();
     }
@@ -263,6 +268,7 @@ export class MainGame extends Scene {
         }
         this.clearLevelOverlay();
         this.clearTutorialHint();
+        this.clearNoActiveRequestNudge();
         this.currentLevelIndex = levelIndex;
         this.currentLevel = level;
         this.endlessModeActive = false;
@@ -296,6 +302,7 @@ export class MainGame extends Scene {
         }
         this.clearLevelOverlay();
         this.clearTutorialHint();
+        this.clearNoActiveRequestNudge();
         this.currentLevel = undefined;
         this.endlessModeActive = true;
         this.gameActive = false;
@@ -593,6 +600,7 @@ export class MainGame extends Scene {
         this.input.enabled = true;
         this.updateConfirmButtonState();
         this.clearTutorialHint();
+        this.clearNoActiveRequestNudge();
         this.timedRequestEntry = undefined;
         this.setActiveRequest(undefined);
         if (this.currentLevel.mode === "tutorial") {
@@ -693,6 +701,7 @@ export class MainGame extends Scene {
         this.input.enabled = true;
         this.updateConfirmButtonState();
         this.clearTutorialHint();
+        this.clearNoActiveRequestNudge();
         this.clearLevelIntroToast();
         while (this.closeTopModalIfOpen()) {
             // Close stacked modal layers so the game-over overlay owns the screen.
@@ -1499,6 +1508,94 @@ export class MainGame extends Scene {
     private setActiveRequest(entry?: QueueEntry) {
         this.activeRequestEntry = entry;
         this.updateActiveRequestHud();
+        if (entry) {
+            this.clearNoActiveRequestNudge();
+            return;
+        }
+        this.scheduleNoActiveRequestNudge();
+    }
+
+    private scheduleNoActiveRequestNudge() {
+        this.clearNoActiveRequestNudge();
+        if (!this.shouldNudgeForNoActiveRequest()) {
+            return;
+        }
+        this.noActiveRequestNudgeTimer = this.time.delayedCall(
+            NO_ACTIVE_REQUEST_NUDGE_DELAY_MS,
+            () => {
+                this.noActiveRequestNudgeTimer = undefined;
+                if (this.shouldNudgeForNoActiveRequest()) {
+                    this.showNoActiveRequestNudge();
+                }
+            },
+        );
+    }
+
+    private shouldNudgeForNoActiveRequest(): boolean {
+        return Boolean(
+            this.gameActive &&
+                !this.gameOverTriggered &&
+                !this.activeRequestEntry &&
+                this.currentLevel?.mode !== "tutorial" &&
+                this.levelOverlayObjects.length === 0 &&
+                this.queueManager?.getQueue().length,
+        );
+    }
+
+    private showNoActiveRequestNudge() {
+        const targetBounds = this.queuePanel?.getPanelBounds();
+        if (!targetBounds) {
+            return;
+        }
+        if (!this.noActiveRequestNudgeHighlight) {
+            this.noActiveRequestNudgeHighlight = this.add.graphics();
+            this.noActiveRequestNudgeHighlight
+                .setDepth(3002)
+                .setScrollFactor(0);
+        }
+        const highlight = this.noActiveRequestNudgeHighlight;
+        this.tweens.killTweensOf(highlight);
+        highlight.clear();
+        highlight.setVisible(true);
+        highlight.setAlpha(1);
+
+        const pad = 8;
+        highlight.lineStyle(6, 0xffd23f, 1);
+        highlight.strokeRoundedRect(
+            targetBounds.x - pad,
+            targetBounds.y - pad,
+            targetBounds.width + pad * 2,
+            targetBounds.height + pad * 2,
+            10,
+        );
+        highlight.lineStyle(2, 0x111111, 0.9);
+        highlight.strokeRoundedRect(
+            targetBounds.x - pad - 3,
+            targetBounds.y - pad - 3,
+            targetBounds.width + pad * 2 + 6,
+            targetBounds.height + pad * 2 + 6,
+            12,
+        );
+        this.tweens.add({
+            targets: highlight,
+            alpha: 0.35,
+            duration: 650,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.easeInOut",
+        });
+    }
+
+    private clearNoActiveRequestNudge() {
+        if (this.noActiveRequestNudgeTimer) {
+            this.noActiveRequestNudgeTimer.remove(false);
+            this.noActiveRequestNudgeTimer = undefined;
+        }
+        if (this.noActiveRequestNudgeHighlight) {
+            this.tweens.killTweensOf(this.noActiveRequestNudgeHighlight);
+            this.noActiveRequestNudgeHighlight.destroy();
+            this.noActiveRequestNudgeHighlight = undefined;
+        }
     }
 
     private startTimedRequestIfNeeded(entry: QueueEntry) {
@@ -1971,6 +2068,8 @@ export class MainGame extends Scene {
         this.input.enabled = true;
         this.updateConfirmButtonState();
         this.refreshLevelHud();
+        this.scheduleNoActiveRequestNudge();
+        playRushStartSound(this);
         this.showCountdownText("RUSH!", true);
         this.time.delayedCall(650, () => {
             this.clearStartCountdownOverlay();
