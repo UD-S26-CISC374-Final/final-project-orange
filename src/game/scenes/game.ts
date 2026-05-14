@@ -18,12 +18,25 @@ import {
     isDevLevelIndex,
 } from "../helpers/dev-level-shortcut";
 import {
+    ensureGameplayMusic,
+    hasUnlockedGameplayMusic,
+    playRequestFailureSound,
+    playRequestSuccessSound,
+    unlockGameplayMusic,
+} from "../helpers/audio";
+import {
     ENDLESS_MODE_DEFINITION,
     LEVEL_DEFINITIONS,
     type LevelDefinition,
 } from "../constants/level_requests";
 
 const TIMEOUT_DRAIN_SECONDS = 120;
+const REQUEST_TIMEOUT_DRAIN_SECONDS: Record<ApiRequestMethod, number> = {
+    GET: 120,
+    DELETE: 120,
+    PUT: 150,
+    POST: 180,
+};
 const TIMEOUT_REWARD_PER_CORRECT = 0.06;
 const TIMEOUT_PENALTY_PER_INCORRECT = 0.08;
 const TIMEOUT_BOSS_REWARD = 100;
@@ -32,6 +45,7 @@ const TIMEOUT_BAR_WIDTH = 20;
 const TIMEOUT_BAR_X = 22;
 const TIMEOUT_BAR_Y = 54;
 const BOSS_SCORE_THRESHOLD = 30;
+const MAX_CONTINUES = 3;
 const ALL_TABLES: EntityType[] = [
     "USER",
     "PET",
@@ -40,7 +54,6 @@ const ALL_TABLES: EntityType[] = [
     "EMPLOYMENT",
     "VEHICLE",
 ];
-const TUTORIAL_GET_TARGET = "field:u1:name";
 
 type MainGameStartData = {
     startInEndlessMode?: boolean;
@@ -58,6 +71,7 @@ export class MainGame extends Scene {
     private lastBossSpawnScore = 0;
     private scoreText?: Phaser.GameObjects.Text;
     private completedRequestCount = 0;
+    private continuesUsed = 0;
     private timeoutNormalized = 1;
     private timeoutTrack?: Phaser.GameObjects.Rectangle;
     private timeoutFill?: Phaser.GameObjects.Rectangle;
@@ -75,6 +89,7 @@ export class MainGame extends Scene {
             container: Phaser.GameObjects.Container;
             box: Phaser.GameObjects.Rectangle;
             label: Phaser.GameObjects.Text;
+            marker: Phaser.GameObjects.Text;
         }
     >();
     private requestKindText?: Phaser.GameObjects.Text;
@@ -103,10 +118,17 @@ export class MainGame extends Scene {
     private tutorialHighlight?: Phaser.GameObjects.Graphics;
     private tutorialCoachKey = "";
     private availableRequestMethods = new Set<ApiRequestMethod>(["GET"]);
+    private introducedRequestMethods = new Set<ApiRequestMethod>();
+    private methodIntroHighlights = new Set<ApiRequestMethod>();
+    private selectedRequestTypeBackground?: Phaser.GameObjects.Rectangle;
+    private selectedRequestTypeAccent?: Phaser.GameObjects.Rectangle;
+    private selectedRequestTypeLabel?: Phaser.GameObjects.Text;
+    private selectedRequestTypeValue?: Phaser.GameObjects.Text;
     private levelOverlayObjects: Phaser.GameObjects.GameObject[] = [];
     private startInEndlessMode = false;
     private startLevelIndex?: number;
     private activeRequestEntry?: QueueEntry;
+    private timedRequestEntry?: QueueEntry;
     private activeRequestContainer?: Phaser.GameObjects.Container;
     private activeRequestBackground?: Phaser.GameObjects.Rectangle;
     private activeRequestTitleText?: Phaser.GameObjects.Text;
@@ -127,6 +149,9 @@ export class MainGame extends Scene {
 
     create() {
         this.resetRuntimeState();
+        if (hasUnlockedGameplayMusic(this)) {
+            ensureGameplayMusic(this);
+        }
         new DevLevelShortcut(this, (levelIndex) =>
             this.startDevLevel(levelIndex),
         );
@@ -165,12 +190,14 @@ export class MainGame extends Scene {
 
         this.queuePanel = new QueuePanel(this, this.queueManager, (entry) => {
             this.setActiveRequest(entry);
+            this.startTimedRequestIfNeeded(entry);
             this.dialogueModal!.show(entry);
         });
 
         this.createTimeoutHud();
         this.createScoreHud();
         this.createLevelHud();
+        this.createSelectedRequestTypeHud();
         this.createActiveRequestHud();
         this.createRequestHud();
         this.createFailureFlashOverlay();
@@ -191,6 +218,7 @@ export class MainGame extends Scene {
         this.score = 0;
         this.lastBossSpawnScore = 0;
         this.completedRequestCount = 0;
+        this.continuesUsed = 0;
         this.timeoutNormalized = 1;
         this.gameOverTriggered = false;
         this.gameActive = false;
@@ -198,9 +226,12 @@ export class MainGame extends Scene {
         this.currentLevel = undefined;
         this.endlessModeActive = false;
         this.availableRequestMethods = new Set<ApiRequestMethod>(["GET"]);
+        this.introducedRequestMethods = new Set<ApiRequestMethod>();
+        this.methodIntroHighlights = new Set<ApiRequestMethod>();
         this.methodButtons.clear();
         this.levelOverlayObjects = [];
         this.activeRequestEntry = undefined;
+        this.timedRequestEntry = undefined;
         this.tutorialCoachKey = "";
         this.clearEnterHoldTimer();
         this.clearLevelIntroToast();
@@ -236,8 +267,10 @@ export class MainGame extends Scene {
         this.currentLevel = level;
         this.endlessModeActive = false;
         this.gameActive = false;
+        this.timedRequestEntry = undefined;
         this.erDiagram?.clearSelectedRequestMethod();
         this.requestKindText?.setText("Cache Method: --");
+        this.updateSelectedRequestTypeHud(undefined);
         this.applyUnlockedTables(level.unlockedTables);
         this.setAvailableRequestMethods(
             level.requests.map((request) => request.objective.method),
@@ -245,6 +278,7 @@ export class MainGame extends Scene {
         this.queueManager.startFixedLevel(
             level.requests,
             this.difficultyForLevel(level),
+            { shuffle: level.mode !== "tutorial" },
         );
         this.syncActiveRequestAfterQueueChange();
         this.setTimeoutNormalized(1);
@@ -265,8 +299,10 @@ export class MainGame extends Scene {
         this.currentLevel = undefined;
         this.endlessModeActive = true;
         this.gameActive = false;
+        this.timedRequestEntry = undefined;
         this.erDiagram?.clearSelectedRequestMethod();
         this.requestKindText?.setText("Cache Method: --");
+        this.updateSelectedRequestTypeHud(undefined);
         this.applyUnlockedTables(ENDLESS_MODE_DEFINITION.unlockedTables);
         this.setAvailableRequestMethods(ENDLESS_MODE_DEFINITION.requestMethods);
         this.queueManager.startEndlessMode();
@@ -307,21 +343,46 @@ export class MainGame extends Scene {
 
     private setAvailableRequestMethods(methods: ApiRequestMethod[]) {
         this.availableRequestMethods = new Set(methods);
+        for (const method of this.availableRequestMethods) {
+            if (!this.introducedRequestMethods.has(method)) {
+                this.introducedRequestMethods.add(method);
+                this.methodIntroHighlights.add(method);
+            }
+        }
         const selected = this.erDiagram?.getSelectedRequestMethod();
         if (selected && !this.availableRequestMethods.has(selected)) {
             this.erDiagram?.clearSelectedRequestMethod();
             this.requestKindText?.setText("Cache Method: --");
+            this.updateSelectedRequestTypeHud(undefined);
         }
         for (const method of this.requestMethods) {
             this.styleMethodButton(method, method === selected);
         }
     }
 
-    private shouldTimerRun(): boolean {
+    private getActiveTimeoutDrainSeconds(): number | undefined {
         if (this.endlessModeActive) {
-            return ENDLESS_MODE_DEFINITION.timerRuns;
+            return ENDLESS_MODE_DEFINITION.timerRuns ?
+                    TIMEOUT_DRAIN_SECONDS
+                :   undefined;
         }
-        return this.currentLevel?.mode !== "tutorial";
+        if (this.currentLevel?.mode !== "fixed" || !this.timedRequestEntry) {
+            return undefined;
+        }
+        const timedRequestStillQueued = this.queueManager
+            ?.getQueue()
+            .some((entry) => this.isSameQueueEntry(entry, this.timedRequestEntry!));
+        if (!timedRequestStillQueued) {
+            this.timedRequestEntry = undefined;
+            return undefined;
+        }
+        return REQUEST_TIMEOUT_DRAIN_SECONDS[
+            this.timedRequestEntry.question.objective.method
+        ];
+    }
+
+    private shouldTimerRun(): boolean {
+        return this.getActiveTimeoutDrainSeconds() !== undefined;
     }
 
     private shouldRewardTimeOnCorrect(): boolean {
@@ -355,7 +416,9 @@ export class MainGame extends Scene {
         if (!this.activeRequestEntry) {
             const firstEntry = this.queueManager?.getQueue()[0];
             this.setTutorialCoach(
-                "First, talk to Alice. Click her NPC card so you can read what she needs.",
+                firstEntry ?
+                    `Click ${firstEntry.npc.name}'s NPC card so you can read what they need.`
+                :   "Click an NPC card so you can read what they need.",
                 firstEntry ?
                     this.queuePanel?.getCardBounds(firstEntry.npc.id)
                 :   undefined,
@@ -366,41 +429,65 @@ export class MainGame extends Scene {
 
         if (this.erDiagram?.hasPendingChanges()) {
             this.setTutorialCoach(
-                "Beautiful, the response is staged. Click Confirm Request(s) to send it back to Alice.",
+                `Beautiful, the response is staged. Click Confirm Request(s) to send it back to ${this.activeRequestEntry.npc.name}.`,
                 this.submitButton?.getBounds(),
                 "confirm",
             );
             return;
         }
 
+        const tutorialMethod = this.activeRequestEntry.question.objective.method;
+        const tutorialGetTarget = this.getTutorialGetTarget();
+
         if (this.erDiagram?.isTableModalVisible()) {
-            if (this.erDiagram.hasStagedGetTarget(TUTORIAL_GET_TARGET)) {
+            if (tutorialMethod === "GET" && tutorialGetTarget) {
+                if (this.erDiagram.hasStagedGetTarget(tutorialGetTarget)) {
+                    this.setTutorialCoach(
+                        "Perfect. That checkmark means the requested field is selected. Press Return or click Save in this table window.",
+                        this.erDiagram.getTableModalSaveButtonBounds(),
+                        "save-get",
+                    );
+                    return;
+                }
+                const targetBounds =
+                    this.erDiagram.getGetTargetBounds(tutorialGetTarget);
+                if (targetBounds) {
+                    this.setTutorialCoach(
+                        "Now choose the exact data to return. Click the requested field in this row.",
+                        targetBounds,
+                        "select-get-field",
+                    );
+                    return;
+                }
+                const pageDirection =
+                    this.erDiagram.getGetTargetPageDirection(tutorialGetTarget);
+                const pageButtonBounds =
+                    pageDirection === -1 ?
+                        this.erDiagram.getTableModalPreviousPageButtonBounds()
+                    :   this.erDiagram.getTableModalNextPageButtonBounds();
                 this.setTutorialCoach(
-                    "Perfect. That checkmark means Alice's name field is selected. Click Save in this table window.",
-                    this.erDiagram.getTableModalSaveButtonBounds(),
-                    "save-get",
+                    pageDirection === -1 ?
+                        "The requested row is on an earlier page. Click the left arrow inside the table modal."
+                    :   "The requested row is on another page. Click the right arrow inside the table modal.",
+                    pageButtonBounds,
+                    "switch-table-page",
                 );
                 return;
             }
-            this.setTutorialCoach(
-                "Now choose the exact data to return. Click the name: Alice field in row 1.",
-                this.erDiagram.getGetTargetBounds(TUTORIAL_GET_TARGET),
-                "select-name",
-            );
             return;
         }
 
-        if (this.erDiagram?.getSelectedRequestMethod() !== "GET") {
+        if (this.erDiagram?.getSelectedRequestMethod() !== tutorialMethod) {
             this.setTutorialCoach(
-                "Let's start with a read. Click GET, the green method button, because Alice only needs us to look something up.",
-                this.methodButtons.get("GET")?.container.getBounds(),
-                "select-get",
+                `Select ${tutorialMethod}, because this request needs that cache method.`,
+                this.methodButtons.get(tutorialMethod)?.container.getBounds(),
+                `select-${tutorialMethod.toLowerCase()}`,
             );
             return;
         }
 
         this.setTutorialCoach(
-            "Nice. GET is selected. Now click the USER table; that's where Alice's row lives.",
+            `${tutorialMethod} is selected. Click the USER table to find the requested row.`,
             this.erDiagram.getEntityNodeBounds("USER"),
             "open-user",
         );
@@ -437,10 +524,26 @@ export class MainGame extends Scene {
     }
 
     private tutorialCoachYFor(key: string): number {
-        if (key === "select-name" || key === "save-get") {
+        if (
+            key === "select-get-field" ||
+            key === "save-get" ||
+            key === "switch-table-page"
+        ) {
             return 82;
         }
         return 286;
+    }
+
+    private getTutorialGetTarget(): string | undefined {
+        const objective = this.activeRequestEntry?.question.objective;
+        if (
+            objective?.method !== "GET" ||
+            !objective.targetRowId ||
+            !objective.targetField
+        ) {
+            return undefined;
+        }
+        return `field:${objective.targetRowId}:${objective.targetField}`;
     }
 
     private drawTutorialHighlight(targetBounds?: Phaser.Geom.Rectangle) {
@@ -490,7 +593,11 @@ export class MainGame extends Scene {
         this.input.enabled = true;
         this.updateConfirmButtonState();
         this.clearTutorialHint();
+        this.timedRequestEntry = undefined;
         this.setActiveRequest(undefined);
+        if (this.currentLevel.mode === "tutorial") {
+            unlockGameplayMusic(this);
+        }
 
         const overlay = this.add
             .rectangle(
@@ -578,6 +685,86 @@ export class MainGame extends Scene {
         this.levelOverlayObjects.push(subtitle, startOverButton, endlessButton);
     }
 
+    private showTimeoutGameOverOverlay() {
+        if (this.levelOverlayObjects.length > 0) {
+            return;
+        }
+        this.gameActive = false;
+        this.input.enabled = true;
+        this.updateConfirmButtonState();
+        this.clearTutorialHint();
+        this.clearLevelIntroToast();
+        while (this.closeTopModalIfOpen()) {
+            // Close stacked modal layers so the game-over overlay owns the screen.
+        }
+        this.timedRequestEntry = undefined;
+        this.setActiveRequest(undefined);
+
+        const overlay = this.add
+            .rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                0x000000,
+                0.78,
+            )
+            .setDepth(4000)
+            .setScrollFactor(0)
+            .setInteractive();
+        const title = this.add
+            .text(this.scale.width / 2, this.scale.height / 2 - 88, "Game Over", {
+                color: "#ffffff",
+                fontSize: "58px",
+                fontStyle: "bold",
+                stroke: "#111111",
+                strokeThickness: 9,
+                align: "center",
+            })
+            .setOrigin(0.5)
+            .setDepth(4001)
+            .setScrollFactor(0);
+
+        const remainingContinues = Math.max(0, MAX_CONTINUES - this.continuesUsed);
+        const continueButton =
+            remainingContinues > 0 ?
+                this.createOverlayButton(
+                    this.scale.width / 2 - 124,
+                    this.scale.height / 2 + 28,
+                    `Continue (${remainingContinues} left)`,
+                    () => this.continueCurrentRun(),
+                )
+            :   this.createDisabledOverlayButton(
+                    this.scale.width / 2 - 124,
+                    this.scale.height / 2 + 28,
+                    "Continue (0 left)",
+                );
+        const startOverButton = this.createOverlayButton(
+            this.scale.width / 2 + 134,
+            this.scale.height / 2 + 28,
+            "Start Over",
+            () => this.scene.start("MainGame", { startLevelIndex: 1 }),
+        );
+        continueButton.setDepth(4001);
+        startOverButton.setDepth(4001);
+
+        this.levelOverlayObjects.push(overlay, title, continueButton, startOverButton);
+    }
+
+    private continueCurrentRun() {
+        if (this.continuesUsed >= MAX_CONTINUES) {
+            return;
+        }
+        this.continuesUsed += 1;
+        this.gameOverTriggered = false;
+        this.clearLevelOverlay();
+        if (this.endlessModeActive) {
+            this.activateEndlessMode(true);
+            return;
+        }
+        this.activateLevel(this.currentLevelIndex, true);
+    }
+
     private createOverlayButton(
         x: number,
         y: number,
@@ -598,6 +785,26 @@ export class MainGame extends Scene {
             .setInteractive({ useHandCursor: true });
         button.setStroke("#063f05", 3);
         button.on("pointerdown", onClick);
+        return button;
+    }
+
+    private createDisabledOverlayButton(
+        x: number,
+        y: number,
+        label: string,
+    ): Phaser.GameObjects.Text {
+        const button = this.add
+            .text(x, y, label, {
+                color: "#d1d5db",
+                fontSize: "22px",
+                fontStyle: "bold",
+                backgroundColor: "#6b7280",
+                padding: { x: 18, y: 10 },
+            })
+            .setOrigin(0.5)
+            .setDepth(2601)
+            .setScrollFactor(0);
+        button.setStroke("#374151", 3);
         return button;
     }
 
@@ -633,11 +840,12 @@ export class MainGame extends Scene {
             return;
         }
         this.refreshTutorialCoach();
-        if (!this.shouldTimerRun()) {
+        const activeDrainSeconds = this.getActiveTimeoutDrainSeconds();
+        if (activeDrainSeconds === undefined) {
             return;
         }
         const elapsedSeconds = delta / 1000;
-        const drainedValue = elapsedSeconds / TIMEOUT_DRAIN_SECONDS;
+        const drainedValue = elapsedSeconds / activeDrainSeconds;
         this.setTimeoutNormalized(this.timeoutNormalized - drainedValue);
     }
 
@@ -647,16 +855,29 @@ export class MainGame extends Scene {
 
     private createRequestHud() {
         const { width, height } = this.scale;
-        const inventoryWidth = Math.floor(width * 0.5);
-        const inventoryHeight = 120;
-        const hiddenBottomPx = 24;
+        const inventoryWidth = Math.floor(width * 0.62);
+        const inventoryHeight = 156;
+        const hiddenBottomPx = 18;
         const inventoryX = width - inventoryWidth - 20;
         const inventoryY = height - inventoryHeight + hiddenBottomPx;
+
+        const cachePanel = this.add
+            .rectangle(
+                inventoryX,
+                inventoryY,
+                inventoryWidth,
+                inventoryHeight,
+                0xf8fafc,
+                0.96,
+            )
+            .setOrigin(0, 0)
+            .setDepth(9);
+        cachePanel.setStrokeStyle(3, 0x111111, 0.92);
 
         this.requestKindText = this.add
             .text(inventoryX + 18, inventoryY + 18, "Cache Method: --", {
                 color: "#111",
-                fontSize: "16px",
+                fontSize: "20px",
                 fontStyle: "bold",
             })
             .setDepth(10);
@@ -693,13 +914,13 @@ export class MainGame extends Scene {
             this.time.delayedCall(2200, () => infoBox.setVisible(false));
         });
 
-        let x = inventoryX + 18;
-        const y = inventoryY + 52;
+        let x = inventoryX + 20;
+        const y = inventoryY + 64;
         for (let index = 0; index < this.requestMethods.length; index += 1) {
             const method = this.requestMethods[index];
             const colors = METHOD_UI_COLORS[method];
-            const buttonWidth = 86;
-            const buttonHeight = 34;
+            const buttonWidth = 118;
+            const buttonHeight = 48;
             const buttonBox = this.add.rectangle(
                 buttonWidth / 2,
                 buttonHeight / 2,
@@ -714,13 +935,23 @@ export class MainGame extends Scene {
                 `${index + 1}. ${method}`,
                 {
                     color: colors.text,
-                    fontSize: "15px",
+                    fontSize: "18px",
                     fontStyle: "bold",
                 },
             );
             buttonLabel.setOrigin(0.5);
+            const selectedMarker = this.add
+                .text(buttonWidth - 16, 8, "✓", {
+                    color: colors.text,
+                    fontSize: "20px",
+                    fontStyle: "bold",
+                    stroke: "#111111",
+                    strokeThickness: 3,
+                })
+                .setOrigin(0.5)
+                .setVisible(false);
             const buttonContainer = this.add
-                .container(x, y, [buttonBox, buttonLabel])
+                .container(x, y, [buttonBox, buttonLabel, selectedMarker])
                 .setDepth(10)
                 .setSize(buttonWidth, buttonHeight);
             const hitArea = this.add
@@ -739,9 +970,10 @@ export class MainGame extends Scene {
                 container: buttonContainer,
                 box: buttonBox,
                 label: buttonLabel,
+                marker: selectedMarker,
             });
             this.styleMethodButton(method, false);
-            x += 96;
+            x += 128;
         }
         this.bindMethodHotkeys();
 
@@ -752,10 +984,10 @@ export class MainGame extends Scene {
                 "Confirm Request(s)",
                 {
                     color: "#ffffff",
-                    fontSize: "16px",
+                    fontSize: "18px",
                     fontStyle: "bold",
                     backgroundColor: "#0b8f08",
-                    padding: { x: 10, y: 7 },
+                    padding: { x: 12, y: 8 },
                 },
             )
             .setDepth(10)
@@ -771,6 +1003,8 @@ export class MainGame extends Scene {
         }
         const available = this.availableRequestMethods.has(method);
         const colors = METHOD_UI_COLORS[method];
+        const introHighlighted =
+            available && this.methodIntroHighlights.has(method);
         button.box.setFillStyle(
             this.toColorNumber(
                 selected && available ?
@@ -780,17 +1014,29 @@ export class MainGame extends Scene {
             available ? 1 : 0.45,
         );
         if (selected && available) {
-            button.box.setStrokeStyle(4, 0x000000, 1);
+            button.box.setStrokeStyle(7, 0x000000, 1);
+        } else if (introHighlighted) {
+            button.box.setStrokeStyle(6, 0xffd23f, 1);
         } else {
             button.box.setStrokeStyle();
         }
         button.label.setStyle({
-            fontSize: selected && available ? "16px" : "15px",
+            fontSize: selected && available ? "20px" : "18px",
             fontStyle: "bold",
             color: available ? colors.text : "#666666",
         });
+        button.marker.setVisible(selected && available);
         button.container.setAlpha(available ? 1 : 0.45);
-        button.container.setDepth(selected && available ? 12 : 10);
+        button.container.setDepth(
+            selected && available ? 12
+            : introHighlighted ? 11
+            : 10,
+        );
+        button.container.setScale(
+            selected && available ? 1.05
+            : introHighlighted ? 1.04
+            : 1,
+        );
     }
 
     private selectMethod(method: ApiRequestMethod) {
@@ -809,11 +1055,13 @@ export class MainGame extends Scene {
             this.flashFailureOverlay();
             return;
         }
+        this.methodIntroHighlights.delete(method);
         this.erDiagram?.setSelectedRequestMethod(method);
         for (const m of this.requestMethods) {
             this.styleMethodButton(m, m === method);
         }
         this.requestKindText?.setText(`Cache Method: ${method}`);
+        this.updateSelectedRequestTypeHud(method);
     }
 
     private submitRequest() {
@@ -821,6 +1069,7 @@ export class MainGame extends Scene {
             return;
         }
         if (!this.erDiagram.hasPendingChanges()) {
+            playRequestFailureSound(this);
             this.flashFailureOverlay();
             return;
         }
@@ -834,6 +1083,13 @@ export class MainGame extends Scene {
         const result = this.erDiagram.confirmPendingRequests(candidates);
 
         if (result.unmatched.length > 0) {
+            for (let index = 0; index < result.unmatched.length; index += 1) {
+                this.time.delayedCall(index * 260, () => {
+                    if (!this.gameOverTriggered) {
+                        playRequestFailureSound(this);
+                    }
+                });
+            }
             this.flashFailureOverlaySeries(result.unmatched.length);
             for (const unmatched of result.unmatched) {
                 console.warn(
@@ -846,6 +1102,13 @@ export class MainGame extends Scene {
             return;
         }
 
+        for (let index = 0; index < result.matched.length; index += 1) {
+            this.time.delayedCall(index * 110, () => {
+                if (!this.gameOverTriggered) {
+                    playRequestSuccessSound(this);
+                }
+            });
+        }
         this.completedRequestCount += result.matched.length;
         if (this.shouldRewardTimeOnCorrect()) {
             this.applyTimeoutRewardSeries(result.matched.length);
@@ -1110,6 +1373,71 @@ export class MainGame extends Scene {
             .setOrigin(1, 0);
     }
 
+    private createSelectedRequestTypeHud() {
+        const panelWidth = 172;
+        const panelHeight = 74;
+        const x = 58;
+        const y = this.scale.height / 2 - panelHeight / 2;
+
+        this.selectedRequestTypeBackground = this.add
+            .rectangle(0, 0, panelWidth, panelHeight, 0xffffff, 0.96)
+            .setOrigin(0, 0);
+        this.selectedRequestTypeBackground.setStrokeStyle(3, 0x424242, 0.9);
+
+        this.selectedRequestTypeAccent = this.add
+            .rectangle(0, 0, 12, panelHeight, 0x9ca3af, 1)
+            .setOrigin(0, 0);
+
+        this.selectedRequestTypeLabel = this.add
+            .text(24, 12, "Request Type", {
+                color: "#111111",
+                fontSize: "13px",
+                fontStyle: "bold",
+            })
+            .setOrigin(0, 0);
+
+        this.selectedRequestTypeValue = this.add
+            .text(24, 35, "--", {
+                color: "#4b5563",
+                fontSize: "25px",
+                fontStyle: "bold",
+            })
+            .setOrigin(0, 0);
+
+        this.add
+            .container(x, y, [
+                this.selectedRequestTypeBackground,
+                this.selectedRequestTypeAccent,
+                this.selectedRequestTypeLabel,
+                this.selectedRequestTypeValue,
+            ])
+            .setDepth(31)
+            .setScrollFactor(0);
+    }
+
+    private updateSelectedRequestTypeHud(method?: ApiRequestMethod) {
+        if (
+            !this.selectedRequestTypeBackground ||
+            !this.selectedRequestTypeAccent ||
+            !this.selectedRequestTypeValue
+        ) {
+            return;
+        }
+        if (!method) {
+            this.selectedRequestTypeBackground.setStrokeStyle(3, 0x424242, 0.9);
+            this.selectedRequestTypeAccent.setFillStyle(0x9ca3af, 1);
+            this.selectedRequestTypeValue.setText("--");
+            this.selectedRequestTypeValue.setStyle({ color: "#4b5563" });
+            return;
+        }
+        const colors = METHOD_UI_COLORS[method];
+        const methodColor = this.toColorNumber(colors.background);
+        this.selectedRequestTypeBackground.setStrokeStyle(4, methodColor, 1);
+        this.selectedRequestTypeAccent.setFillStyle(methodColor, 1);
+        this.selectedRequestTypeValue.setText(method);
+        this.selectedRequestTypeValue.setStyle({ color: colors.selectedBackground });
+    }
+
     private createActiveRequestHud() {
         const panelWidth = 590;
         this.activeRequestBackground = this.add
@@ -1135,7 +1463,7 @@ export class MainGame extends Scene {
             .setOrigin(0, 0);
 
         this.activeRequestContainer = this.add
-            .container(318, 8, [
+            .container(358, 8, [
                 this.activeRequestBackground,
                 this.activeRequestTitleText,
                 this.activeRequestBodyText,
@@ -1173,18 +1501,31 @@ export class MainGame extends Scene {
         this.updateActiveRequestHud();
     }
 
+    private startTimedRequestIfNeeded(entry: QueueEntry) {
+        if (
+            this.endlessModeActive ||
+            this.currentLevel?.mode !== "fixed" ||
+            this.gameOverTriggered
+        ) {
+            return;
+        }
+        this.timedRequestEntry = entry;
+    }
+
     private syncActiveRequestAfterQueueChange() {
         if (!this.queueManager) {
             this.setActiveRequest(undefined);
+            this.timedRequestEntry = undefined;
             return;
         }
         const queue = this.queueManager.getQueue();
         if (
-            this.currentLevel?.mode === "tutorial" &&
-            !this.activeRequestEntry
+            this.timedRequestEntry &&
+            !queue.some((entry) =>
+                this.isSameQueueEntry(entry, this.timedRequestEntry!),
+            )
         ) {
-            this.setActiveRequest(undefined);
-            return;
+            this.timedRequestEntry = undefined;
         }
         const activeEntry = this.activeRequestEntry;
         if (activeEntry) {
@@ -1196,7 +1537,7 @@ export class MainGame extends Scene {
                 return;
             }
         }
-        this.setActiveRequest(queue[0]);
+        this.setActiveRequest(undefined);
     }
 
     private isSameQueueEntry(a: QueueEntry, b: QueueEntry): boolean {
@@ -1304,7 +1645,7 @@ export class MainGame extends Scene {
             return;
         }
         this.gameOverTriggered = true;
-        this.scene.start("GameOver");
+        this.showTimeoutGameOverOverlay();
     }
 
     private syncTimeoutBarFill(value: number) {

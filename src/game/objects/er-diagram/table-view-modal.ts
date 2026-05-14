@@ -5,6 +5,11 @@ import type {
 } from "./diagram-handler";
 import { METHOD_MODAL_SURFACE, METHOD_UI_COLORS } from "../../helpers/method-ui-colors";
 
+const MODAL_CONTENT_X = -280;
+const MODAL_FIELD_X = -265;
+const MODAL_VALUE_X = -80;
+const MODAL_CONTENT_WIDTH = 560;
+
 export type RowData = Record<string, TableScalar>;
 
 type PointerEventDataWithStopPropagation = Phaser.Types.Input.EventData & {
@@ -107,6 +112,8 @@ export class TableViewModal {
     private readonly rowsPerPageExpanded = 1;
     private editorScrollOffset = 0;
     private editorContentHeight = 0;
+    private cursorBlinkTimer?: Phaser.Time.TimerEvent;
+    private cursorVisible = true;
     private readonly hooks?: TableViewModalHooks;
     private readonly keyboardHandler: (event: KeyboardEvent) => void;
 
@@ -259,49 +266,51 @@ export class TableViewModal {
         this.deleteRowButton.setVisible(false);
 
         this.previousPageButton = scene.add
-            .text(-34, 158, "←", {
+            .text(-342, 0, "←", {
                 color: "#ffffff",
-                fontSize: "18px",
+                fontSize: "68px",
                 fontStyle: "bold",
                 backgroundColor: "#555555",
-                padding: { left: 10, right: 10, top: 2, bottom: 2 },
+                padding: { left: 16, right: 16, top: 4, bottom: 10 },
             })
+            .setOrigin(0.5)
             .setInteractive({ useHandCursor: true });
         this.previousPageButton.on("pointerdown", () => this.goToPreviousPage());
 
         this.nextPageButton = scene.add
-            .text(34, 158, "→", {
+            .text(342, 0, "→", {
                 color: "#ffffff",
-                fontSize: "18px",
+                fontSize: "68px",
                 fontStyle: "bold",
                 backgroundColor: "#555555",
-                padding: { left: 10, right: 10, top: 2, bottom: 2 },
+                padding: { left: 16, right: 16, top: 4, bottom: 10 },
             })
+            .setOrigin(0.5)
             .setInteractive({ useHandCursor: true });
         this.nextPageButton.on("pointerdown", () => this.goToNextPage());
 
-        this.pageText = scene.add.text(-140, 159, "Page 1/1", {
+        this.pageText = scene.add.text(0, 158, "Page 1/1", {
             color: "#111",
             fontSize: "14px",
             fontStyle: "bold",
-        });
+        }).setOrigin(0.5, 0);
 
-        this.tableText = scene.add.text(-350, -120, "", {
+        this.tableText = scene.add.text(MODAL_CONTENT_X, -120, "", {
             color: "#222",
             fontSize: "14px",
             fontFamily: "monospace",
             lineSpacing: 6,
-            wordWrap: { width: 700 },
+            wordWrap: { width: MODAL_CONTENT_WIDTH },
         });
 
         this.editorContainer = scene.add.container(0, 0, []);
         this.editorContainer.setVisible(false);
 
-        this.hintText = scene.add.text(-350, 108, "", {
+        this.hintText = scene.add.text(MODAL_CONTENT_X, 108, "", {
             color: "#444",
             fontSize: "13px",
             fontStyle: "italic",
-            wordWrap: { width: 700 },
+            wordWrap: { width: MODAL_CONTENT_WIDTH },
         });
 
         this.container = scene.add.container(scene.scale.width / 2, scene.scale.height / 2, [
@@ -414,6 +423,7 @@ export class TableViewModal {
         );
         this.scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
             window.removeEventListener("keydown", this.keyboardHandler);
+            this.stopCursorBlink();
         });
     }
 
@@ -494,11 +504,56 @@ export class TableViewModal {
         return this.saveButton.getBounds();
     }
 
+    getAddRowButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        if (!this.container.visible || !this.addRowButton.visible) {
+            return undefined;
+        }
+        return this.addRowButton.getBounds();
+    }
+
+    getPreviousPageButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        if (!this.container.visible || !this.previousPageButton.visible) {
+            return undefined;
+        }
+        return this.previousPageButton.getBounds();
+    }
+
+    getNextPageButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        if (!this.container.visible || !this.nextPageButton.visible) {
+            return undefined;
+        }
+        return this.nextPageButton.getBounds();
+    }
+
     getGetTargetBounds(target: string): Phaser.Geom.Rectangle | undefined {
         if (!this.container.visible) {
             return undefined;
         }
         return this.getTargetObjects.get(target)?.getBounds();
+    }
+
+    getGetTargetPageDirection(target: string): -1 | 0 | 1 | undefined {
+        if (!this.container.visible || this.currentMode !== "GET") {
+            return undefined;
+        }
+        const targetRowId = this.getTargetRowId(target);
+        if (!targetRowId) {
+            return undefined;
+        }
+        const rowIndex = this.currentRows.findIndex(
+            (row, index) => rowIdOf(row, `row-${index + 1}`) === targetRowId,
+        );
+        if (rowIndex < 0) {
+            return undefined;
+        }
+        const targetPage = Math.floor(rowIndex / this.getEffectiveRowsPerPage());
+        if (targetPage < this.currentPageIndex) {
+            return -1;
+        }
+        if (targetPage > this.currentPageIndex) {
+            return 1;
+        }
+        return 0;
     }
 
     hasGetTargetSelected(target: string): boolean {
@@ -762,7 +817,7 @@ export class TableViewModal {
     private renderEditorFields() {
         this.clearEditorObjects();
         if (this.stagedRows.length === 0) {
-            const emptyText = this.scene.add.text(-350, -120, "No rows available for this table.", {
+            const emptyText = this.scene.add.text(MODAL_CONTENT_X, -120, "No rows available for this table.", {
                 color: "#222",
                 fontSize: "14px",
             });
@@ -805,7 +860,7 @@ export class TableViewModal {
                           ? "[x] "
                           : "[ ] "
                       : "";
-            const rowLabel = this.scene.add.text(-350, y, `${rowPrefix}Row ${rowIndex + 1}`, {
+            const rowLabel = this.scene.add.text(MODAL_CONTENT_X, y, `${rowPrefix}Row ${rowIndex + 1}`, {
                 color:
                     rowMarkedForDelete
                         ? "#ffffff"
@@ -886,7 +941,7 @@ export class TableViewModal {
                     !readonly &&
                     this.selectedDeleteFields.has(fieldKey);
                 const labelText = this.scene.add.text(
-                    -335,
+                    MODAL_FIELD_X,
                     y,
                     readonly ? `${column} (readonly):` : `${column}:`,
                     {
@@ -904,7 +959,7 @@ export class TableViewModal {
                             ? "[x] "
                             : "[ ] "
                         : "";
-                const valueText = this.scene.add.text(-145, y, `${deleteFieldPrefix}${value}`, {
+                const valueText = this.scene.add.text(MODAL_VALUE_X, y, `${deleteFieldPrefix}${value}`, {
                     color: rowMarkedForDelete
                         ? "#ffffff"
                         : fieldMarkedForDelete
@@ -977,6 +1032,11 @@ export class TableViewModal {
         if (!this.container.visible) {
             return;
         }
+        if (this.isReturnKey(event) && this.saveButton.visible) {
+            event.preventDefault();
+            this.onSavePressed();
+            return;
+        }
         if (event.key === "ArrowLeft") {
             event.preventDefault();
             this.goToPreviousPage();
@@ -986,6 +1046,10 @@ export class TableViewModal {
             event.preventDefault();
             this.goToNextPage();
         }
+    }
+
+    private isReturnKey(event: KeyboardEvent): boolean {
+        return event.key === "Enter" || event.code === "NumpadEnter";
     }
 
     private addRow() {
@@ -1020,7 +1084,7 @@ export class TableViewModal {
         this.clearEditorObjects();
         if (this.currentRows.length === 0) {
             const emptyText = this.scene.add.text(
-                -350,
+                MODAL_CONTENT_X,
                 -120,
                 "No rows available for this table.",
                 {
@@ -1056,7 +1120,7 @@ export class TableViewModal {
             const rowSelected = this.selectedGetTargets.has(rowTarget);
             const rowPrefix = rowSelected ? "[x] " : "[ ] ";
             const rowText = this.scene.add
-                .text(-350, y, `${rowPrefix}Row ${rowIndex + 1}`, {
+                .text(MODAL_CONTENT_X, y, `${rowPrefix}Row ${rowIndex + 1}`, {
                     color: rowSelected ? "#ffffff" : "#111",
                     fontSize: "13px",
                     fontStyle: "bold",
@@ -1086,7 +1150,7 @@ export class TableViewModal {
                 const fieldSelected = this.selectedGetTargets.has(fieldTarget);
                 const value = rowCellToString(this.currentRows[rowIndex][column]);
                 const fieldText = this.scene.add
-                    .text(-335, y, `${column}: ${value}`, {
+                    .text(MODAL_FIELD_X, y, `${column}: ${value}`, {
                         color: fieldSelected ? "#ffffff" : pal.accentText,
                         fontSize: "13px",
                         backgroundColor: fieldSelected
@@ -1139,6 +1203,14 @@ export class TableViewModal {
             this.selectedGetTargets.add(target);
         }
         this.renderGetSelectionRows();
+    }
+
+    private getTargetRowId(target: string): string | undefined {
+        const [kind, rowId] = target.split(":");
+        if ((kind !== "row" && kind !== "field") || !rowId) {
+            return undefined;
+        }
+        return rowId;
     }
 
     private isReadonlyColumn(column: string): boolean {
@@ -1342,10 +1414,12 @@ export class TableViewModal {
         );
         this.rowEditorBlocker.setVisible(true);
         this.rowEditorContainer.setVisible(true);
+        this.startCursorBlink();
         this.renderRowEditorFields();
     }
 
     private closeRowEditor() {
+        this.stopCursorBlink();
         this.rowEditorVisible = false;
         this.rowEditorRowIndex = undefined;
         this.rowEditorDraft = {};
@@ -1357,6 +1431,28 @@ export class TableViewModal {
         this.rowEditorObjects.length = 0;
         this.rowEditorBlocker.setVisible(false);
         this.rowEditorContainer.setVisible(false);
+    }
+
+    private startCursorBlink() {
+        this.stopCursorBlink();
+        this.cursorVisible = true;
+        this.cursorBlinkTimer = this.scene.time.addEvent({
+            delay: 460,
+            loop: true,
+            callback: () => {
+                if (!this.rowEditorVisible) {
+                    return;
+                }
+                this.cursorVisible = !this.cursorVisible;
+                this.renderRowEditorFields();
+            },
+        });
+    }
+
+    private stopCursorBlink() {
+        this.cursorBlinkTimer?.remove(false);
+        this.cursorBlinkTimer = undefined;
+        this.cursorVisible = true;
     }
 
     private renderRowEditorFields() {
@@ -1375,9 +1471,12 @@ export class TableViewModal {
                 fontStyle: "bold",
             });
             const value = rowCellToString(this.rowEditorDraft[column]);
-            const valueText = this.scene.add.text(-34, y, isActive ? `${value}_` : value, {
+            const displayValue =
+                isActive ? `${value}${this.cursorVisible ? "|" : " "}` : value;
+            const valueText = this.scene.add.text(-34, y, displayValue, {
                 color: readonly ? "#666" : pal.accentText,
                 fontSize: "14px",
+                fontFamily: "monospace",
                 backgroundColor: readonly ? "#f1f1f1" : pal.surface,
                 padding: { left: 4, right: 4, top: 2, bottom: 2 },
             });
@@ -1385,6 +1484,7 @@ export class TableViewModal {
                 valueText.setInteractive({ useHandCursor: true });
                 valueText.on("pointerdown", () => {
                     this.rowEditorActiveColumn = column;
+                    this.cursorVisible = true;
                     this.renderRowEditorFields();
                 });
             }
@@ -1398,11 +1498,22 @@ export class TableViewModal {
         if (!this.rowEditorActiveColumn || !this.rowEditorVisible) {
             return;
         }
+        if (this.isReturnKey(event)) {
+            event.preventDefault();
+            this.saveRowEditor();
+            return;
+        }
+        if (event.key === "Tab") {
+            event.preventDefault();
+            this.moveRowEditorFocus(event.shiftKey ? -1 : 1);
+            return;
+        }
         const column = this.rowEditorActiveColumn;
         const existingValue = this.rowEditorDraft[column];
         const currentValue = rowCellToString(this.rowEditorDraft[column]);
         if (event.key === "Backspace") {
             event.preventDefault();
+            this.cursorVisible = true;
             this.rowEditorDraft[column] = this.coerceValue(
                 currentValue.slice(0, -1),
                 existingValue,
@@ -1413,10 +1524,31 @@ export class TableViewModal {
         if (event.key.length !== 1) {
             return;
         }
+        event.preventDefault();
+        this.cursorVisible = true;
         this.rowEditorDraft[column] = this.coerceValue(
             `${currentValue}${event.key}`,
             existingValue,
         );
+        this.renderRowEditorFields();
+    }
+
+    private moveRowEditorFocus(direction: 1 | -1) {
+        const editableColumns = this.rowEditorColumns.filter(
+            (column) => !this.isReadonlyColumn(column),
+        );
+        if (editableColumns.length === 0) {
+            return;
+        }
+        const currentIndex = editableColumns.indexOf(
+            this.rowEditorActiveColumn ?? "",
+        );
+        const startIndex = currentIndex >= 0 ? currentIndex : 0;
+        const nextIndex =
+            (startIndex + direction + editableColumns.length) %
+            editableColumns.length;
+        this.rowEditorActiveColumn = editableColumns[nextIndex];
+        this.cursorVisible = true;
         this.renderRowEditorFields();
     }
 

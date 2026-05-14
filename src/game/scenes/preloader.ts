@@ -32,6 +32,10 @@ export class Preloader extends Scene {
         this.load.image("phaser-logo", "phaser-logo.png");
 
         this.load.image("npc", "user.webp");
+
+        this.load.audio("request-success", "pop.ogg");
+        this.load.audio("request-failure", "saw.wav");
+        this.load.audio("bgm", "bgm.mp3");
     }
 
     create() {

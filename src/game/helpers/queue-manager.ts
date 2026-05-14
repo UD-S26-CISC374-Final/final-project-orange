@@ -29,6 +29,10 @@ type QuestionFn = (npc: User, store: ERStore) => QuestionDraft;
 
 const QUEUE_SIZE = 3;
 
+type FixedLevelOptions = {
+    shuffle?: boolean;
+};
+
 function difficultyToDisplayMode(d: Difficulty): NpcRequestDisplayMode {
     if (d === 1) return "easy";
     if (d === 2) return "medium";
@@ -58,8 +62,12 @@ export class QueueManager {
     startFixedLevel(
         requests: FixedLevelRequest[],
         difficulty: Difficulty,
+        options?: FixedLevelOptions,
     ): void {
-        this.fixedRequests = this.shuffleFixedRequests(requests);
+        this.fixedRequests =
+            options?.shuffle === false ?
+                [...requests]
+            :   this.shuffleFixedRequests(requests);
         this.fixedRemainingRequests = [...this.fixedRequests];
         this.fixedCompletedCount = 0;
         this.fixedTotalCount = this.fixedRequests.length;

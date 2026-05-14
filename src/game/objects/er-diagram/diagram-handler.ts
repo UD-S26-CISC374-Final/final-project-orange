@@ -593,8 +593,24 @@ export class ERDiagram {
         return this.tableViewModal.getSaveButtonBounds();
     }
 
+    getTableModalAddRowButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        return this.tableViewModal.getAddRowButtonBounds();
+    }
+
+    getTableModalPreviousPageButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        return this.tableViewModal.getPreviousPageButtonBounds();
+    }
+
+    getTableModalNextPageButtonBounds(): Phaser.Geom.Rectangle | undefined {
+        return this.tableViewModal.getNextPageButtonBounds();
+    }
+
     getGetTargetBounds(target: string): Phaser.Geom.Rectangle | undefined {
         return this.tableViewModal.getGetTargetBounds(target);
+    }
+
+    getGetTargetPageDirection(target: string): -1 | 0 | 1 | undefined {
+        return this.tableViewModal.getGetTargetPageDirection(target);
     }
 
     hasStagedGetTarget(target: string): boolean {

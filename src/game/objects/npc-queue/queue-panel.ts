@@ -1,11 +1,11 @@
 import Phaser from "phaser";
 import { QueueManager, type QueueEntry } from "../../helpers/queue-manager";
 
-const SPRITE_HEIGHT = 120;
-const GAP = 16;
-const CARD_W = 100;
-const CARD_H = SPRITE_HEIGHT + 10;
-const LABEL_HEIGHT = 26;
+const SPRITE_HEIGHT = 104;
+const GAP = 12;
+const CARD_W = 88;
+const CARD_H = SPRITE_HEIGHT + 8;
+const LABEL_HEIGHT = 24;
 const SECTION_W = (CARD_W * 3) + (GAP * 2) + 32;
 const SECTION_H = CARD_H + LABEL_HEIGHT + 16;
 
@@ -44,7 +44,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
 
         const label = scene.add.text(10, 6, "Waiting Queue", {
             color: "#111",
-            fontSize: "15px",
+            fontSize: "14px",
             fontStyle: "bold",
         });
         this.add(label);
@@ -103,7 +103,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
             entry.npc.name,
             {
                 color: isBoss ? "#cc3300" : "#111",
-                fontSize: "11px",
+                fontSize: "10px",
                 fontStyle: "bold",
                 fontFamily: "monospace",
             },
@@ -112,7 +112,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
 
         const portrait = this.scene.add.image(
             CARD_W / 2,
-            18 + SPRITE_HEIGHT / 2,
+            16 + SPRITE_HEIGHT / 2,
             "npc",
         );
         const scaleToFit = Math.min(
@@ -129,7 +129,7 @@ export class QueuePanel extends Phaser.GameObjects.Container {
 
         const idTag = this.scene.add.text(
             CARD_W / 2,
-            18 + SPRITE_HEIGHT * 0.72,
+            16 + SPRITE_HEIGHT * 0.72,
             `[${entry.npc.id}]`,
             {
                 color: "#111111",
@@ -145,8 +145,8 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         this.showNpcBubble(
             entry.npc.id,
             card,
-            portrait.x + 30,
-            portrait.y - 50,
+            portrait.x + 26,
+            portrait.y - 42,
             isBoss,
         );
 
@@ -177,12 +177,12 @@ export class QueuePanel extends Phaser.GameObjects.Container {
         const bubbleText = isBoss ? "!!!" : "...";
 
         const bubbleBg = this.scene.add
-            .ellipse(x, y, 34, 22, bubbleColor, 0.95)
+            .ellipse(x, y, 30, 20, bubbleColor, 0.95)
             .setStrokeStyle(2, strokeColor, 1);
         const bubbleTxt = this.scene.add
             .text(x, y - 1, bubbleText, {
                 color: textColor,
-                fontSize: "16px",
+                fontSize: "14px",
                 fontStyle: "bold",
             })
             .setOrigin(0.5);

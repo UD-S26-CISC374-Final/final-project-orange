@@ -52,7 +52,7 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
         id: "tutorial",
         title: "Tutorial",
         intro:
-            "Next feature: GET. Use it when a customer only needs existing data returned from a table.",
+            "Next feature: GET. Return exact fields from USER rows, then use the table pages to find another row.",
         mode: "tutorial",
         unlockedTables: ["USER"],
         requests: [
@@ -69,6 +69,21 @@ export const LEVEL_DEFINITIONS: LevelDefinition[] = [
                     targetRowId: "u1",
                     targetField: "name",
                     description: 'GET USER: fetch row id u1, field "name"',
+                },
+            },
+            {
+                id: "tutorial-get-user-age",
+                npcId: "u2",
+                dialogue:
+                    'Great. Now switch pages in USER and return Bob\'s "age" field.',
+                naturalDialogue:
+                    'Nice work. Now use the USER table pages to find my row and return just the "age" field.',
+                objective: {
+                    method: "GET",
+                    targetType: "USER",
+                    targetRowId: "u2",
+                    targetField: "age",
+                    description: 'GET USER: fetch row id u2, field "age"',
                 },
             },
         ],
